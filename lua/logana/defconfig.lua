@@ -21,16 +21,16 @@ local M = {
     -- with string, it will link to existing highlight group
     -- with '#', it will took as guibg
     highlight_colors = {
-        { "TermCursor" },
-        { "DiffText" },
-        { "#47b292" },  -- Aqua menthe
-        { "#8A2BE2" },  -- Proton purple
-        { "#9c4186" },  -- Orange red
-        { "#008000" },  -- Office green
-        { "#128eb4" },-- Just blue
-        { "#fdffe3" },  -- Cosmic latte
-        { "#7d5c34" },  -- Fallow brown
-        { "#ff9d7f" },  -- Aqua menthe
+        { link = "TermCursor" },
+        { link = "DiffText" },
+        { bg = "#B3E5FC" },  -- Aqua menthe
+        { bg = "#8A2BE2" },  -- Proton purple
+        { bg = "#9c4186" },  -- Orange red
+        { bg = "#008000" },  -- Office green
+        { bg = "#128eb4" },-- Just blue
+        { bg = "#E1BEE7" },  -- Cosmic latte
+        { bg = "#7d5c34" },  -- Fallow brown
+        { bg = "#ff9d7f" },  -- Aqua menthe
     },
 
     highlight = {

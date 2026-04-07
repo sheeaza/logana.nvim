@@ -3,30 +3,24 @@ local fn = vim.fn
 
 local M = {}
 
-local function tbl_deep_extend(dst, src)
-    local ok, res = pcall(vim.tbl_deep_extend, "force", {}, dst or {}, src or {})
-    if ok then
-        return res
+local function get_suffix_and_increase()
+    local suffix_mode = M.config.naming.suffix
+
+    local suffix = ''
+    if suffix_mode == "alphabet" then
+        counter = M._suffix_counter
+
+        repeat
+            suffix = string.char(string.byte("a") + counter % 26) .. suffix
+            counter = math.floor(counter / 26) - 1
+        until counter < 0
+    else
+        suffix = tostring(M._suffix_counter)
     end
-    local function merge(a, b)
-        local out = {}
-        for k, v in pairs(a or {}) do
-            if type(v) == "table" then
-                out[k] = merge(v, {})
-            else
-                out[k] = v
-            end
-        end
-        for k, v in pairs(b or {}) do
-            if type(v) == "table" and type(out[k]) == "table" then
-                out[k] = merge(out[k], v)
-            else
-                out[k] = v
-            end
-        end
-        return out
-    end
-    return merge(dst or {}, src or {})
+
+    M._suffix_counter = M._suffix_counter + 1
+
+    return suffix
 end
 
 
@@ -37,14 +31,10 @@ local function setup_highlights()
     local colors = M.config.highlight_colors
 
     for i, entry in ipairs(colors) do
-        local val = entry and entry[1]
         local name = "LoganaMatch" .. tostring(i)
+        entry.default = true
 
-        if val:sub(1, 1) == "#" then
-            pcall(api.nvim_set_hl, 0, name, { bg = val, default = true })
-        else
-            pcall(api.nvim_set_hl, 0, name, { link = val, default = true })
-        end
+        pcall(api.nvim_set_hl, 0, name, entry)
     end
 end
 
@@ -76,7 +66,7 @@ local function create_normal_buffer(name, filetype, opts)
 end
 
 local function open_windows_for_rule_and_result(rule_buf, result_buf)
-    if M.config.result_win.behavior ==
+    -- if M.config.result_win.behavior ==
     vim.cmd("vsplit")
     local rule_win = api.nvim_get_current_win()
     api.nvim_win_set_buf(rule_win, rule_buf)
@@ -502,26 +492,6 @@ function M.ensure_result_for_rule(rule_buf)
     bind_lifecycle(rule_buf, result_buf)
     refresh_from_rule(rule_buf)
     return result_buf
-end
-
-local function get_suffix_and_increase()
-    local suffix_mode = M.config.naming.suffix
-
-    local suffix = ''
-    if suffix_mode == "alphabet" then
-        counter = M._suffix_counter
-
-        repeat
-            suffix = string.char(string.byte("a") + counter % 26) .. suffix
-            counter = math.floor(counter / 26) - 1
-        until counter < 0
-    else
-        suffix = tostring(M._suffix_counter)
-    end
-
-    M._suffix_counter = M._suffix_counter + 1
-
-    return suffix
 end
 
 local function setup_config()
