@@ -38,10 +38,15 @@ local M = {
         hl_result = true,-- true: highlight for result buffers. false: ...
     },
 
+    -- layout
+    -- todo:
     layout = {
-        -- 'hsplit'
-        -- 'vsplit'
-        rule_result = 'vsplit',
+        -- rule_pos: define rule and result layout
+        --  'top': rule on top, result on bottom
+        --  'bottom': rule on ..
+        --  'left': rule on left, result ...
+        --  'right': rule on...
+        rule_pos = 'top',
 
         -- percentage of rule and result window, result window wil be set to '1 - rule_window'
         rule_window = '50',
@@ -94,6 +99,11 @@ local M = {
         "# buf_only = false",
         "# pattern: used to match file to grep, if not provided, then will grep all",
         "# pattern = '<regex>'",
+    },
+
+    key = {
+        rule_refresh = '<cr>',
+        result_jump = '<cr>',
     },
 }
 

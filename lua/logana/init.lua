@@ -66,15 +66,25 @@ local function create_normal_buffer(name, filetype, opts)
 end
 
 local function open_windows_for_rule_and_result(rule_buf, result_buf)
-    -- if M.config.result_win.behavior ==
     vim.cmd("vsplit")
     local rule_win = api.nvim_get_current_win()
     api.nvim_win_set_buf(rule_win, rule_buf)
 
-    -- 2) Split the right pane horizontally and put result on bottom
-    vim.cmd("split")
-    local result_win = api.nvim_get_current_win()
-    api.nvim_win_set_buf(result_win, result_buf)
+    if M.config.result_win.behavior == 'open_with_rule' then
+        -- 2) Split the right pane horizontally and put result on bottom
+        if M.config.layout.rule_pos == 'top' then
+            vim.cmd("split")
+        elseif M.config.layout.rule_pos == 'bottom' then
+            vim.cmd("aboveleft split")
+        elseif M.config.layout.rule_pos == 'left' then
+            vim.cmd("vsplit")
+        else
+            vim.cmd("aboveleft  vsplit")
+        end
+
+        local result_win = api.nvim_get_current_win()
+        api.nvim_win_set_buf(result_win, result_buf)
+    end
 
     -- Keep rule window focused for editing rules
     api.nvim_set_current_win(rule_win)
@@ -367,14 +377,14 @@ local function initialize_rule_buffer(rule_buf)
     end
 
     -- Buffer-local mapping: <CR> to refresh
-    vim.keymap.set("n", "<CR>", function()
+    vim.keymap.set("n", M.config.key.rule_refresh, function()
         refresh_from_rule(rule_buf)
     end, { buffer = rule_buf, noremap = true, silent = true, desc = "logana: refresh results" })
 end
 
 -- Initialize result buffer mappings/behavior
 local function initialize_result_buffer(result_buf)
-    vim.keymap.set("n", "<CR>", function()
+    vim.keymap.set("n", M.config.key.result_jump, function()
         local line = api.nvim_get_current_line()
         local lnum = tonumber((line or ""):match("^(%d+):"))
         if not lnum then
@@ -430,25 +440,6 @@ function M.open(opts)
 
     -- Bind buffer lifecycles (cleanup on wipe)
     bind_lifecycle(rule_buf, result_buf)
-
-    -- Run initial search in case template already has patterns
-    refresh_from_rule(rule_buf)
-end
-
-function M.refresh()
-    local cur = api.nvim_get_current_buf()
-    -- If current is a rule buffer, refresh that; otherwise try to find a linked rule by result buffer
-    local link = M.state.rule_links[cur]
-    if link then
-        refresh_from_rule(cur)
-        return
-    end
-    local r = M.state.result_to_rule[cur]
-    if r then
-        refresh_from_rule(r)
-        return
-    end
-    vim.notify("[logana] No rule/result buffer context to refresh", vim.log.levels.WARN)
 end
 
 -- Utility helpers for external control
