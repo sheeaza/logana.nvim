@@ -3,8 +3,11 @@ local M = {
         cmd = 'rg', -- you can set your 'rg' path here
         args = { "--json", "--no-config", "--color", "never" },
 
-        -- smart_case: overridable in rule buffer
-        smart_case = true,
+        -- case: set case type
+        --  smart: use --smart-case
+        --  insensitive: --ignore-case
+        --  sensitive: --case-sensitive
+        case = 'smart',
 
         -- whole_word: overridable in rule buffer
         whole_word = false,
@@ -12,25 +15,14 @@ local M = {
 
     -- source: define what to grep
     source = {
-        -- buffer_only:
-        --  true: only grep in buffers
-        --  false: grep both in buffers and files
-        buffer_only = false,
+        -- opened_only:
+        --  true: only grep in opened buffers
+        --  false: grep all files in pwd
+        opened_only = false,
     },
 
-    -- with string, it will link to existing highlight group
-    -- with '#', it will took as guibg
     highlight_colors = {
-        { link = "TermCursor" },
-        { link = "DiffText" },
-        { bg = "#B3E5FC" },  -- Aqua menthe
-        { bg = "#8A2BE2" },  -- Proton purple
-        { bg = "#9c4186" },  -- Orange red
-        { bg = "#008000" },  -- Office green
-        { bg = "#128eb4" },-- Just blue
-        { bg = "#E1BEE7" },  -- Cosmic latte
-        { bg = "#7d5c34" },  -- Fallow brown
-        { bg = "#ff9d7f" },  -- Aqua menthe
+         link = "TermCursor",
     },
 
     highlight = {
@@ -79,27 +71,28 @@ local M = {
     },
 
     -- help text put to rule buffer
-    rule_template = {
-        "[pattern]",
-        "# Each line is a rg regex wrapped with /<regex>/, to search in the source buffer.",
-        "# Press <Enter> in this buffer to refresh results.",
-        "# Example: /aa.*[123]/",
-        "",
-        "",
-        "[rule]",
-        "smart_case = true",
-        "whole_word = false",
-        "",
-        "",
-        "#[highlight]",
-        "# similar to [pattern], but this will not used to grep text, only do highlight things",
-        "",
-        "",
-        "#[file_pattern]",
-        "# buf_only = false",
-        "# pattern: used to match file to grep, if not provided, then will grep all",
-        "# pattern = '<regex>'",
-    },
+    rule_template = [[
+[pattern]
+# Each line is a rg regex wrapped with /<regex>/, to search in the source buffer.
+# Press <Enter> in this buffer to refresh results.
+# Example: /aa.*[123]/
+
+
+[rule]
+# case: support smart, sensitive, insensitive
+case = smart
+whole_word = false
+
+
+#[highlight]
+# similar to [pattern], but this will not used to grep text, only do highlight things
+
+
+#[file_pattern]
+# buf_only = false
+# pattern: used to match file to grep, if not provided, then will grep all
+# pattern = '<regex>'
+]],
 
     key = {
         rule_refresh = '<cr>',
