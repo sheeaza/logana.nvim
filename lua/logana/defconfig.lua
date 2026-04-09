@@ -2,23 +2,6 @@ local M = {
     rg = {
         cmd = 'rg', -- you can set your 'rg' path here
         args = { "--json", "--no-config", "--color", "never" },
-
-        -- case: set case type
-        --  smart: use --smart-case
-        --  insensitive: --ignore-case
-        --  sensitive: --case-sensitive
-        case = 'smart',
-
-        -- whole_word: overridable in rule buffer
-        whole_word = false,
-    },
-
-    -- source: define what to grep
-    source = {
-        -- opened_only:
-        --  true: only grep in opened buffers
-        --  false: grep all files in pwd
-        opened_only = false,
     },
 
     highlight_colors = {
@@ -72,26 +55,16 @@ local M = {
 
     -- help text put to rule buffer
     rule_template = [[
-[pattern]
-# Each line is a rg regex wrapped with /<regex>/, to search in the source buffer.
+[rg]
+# below is rg cmd args
 # Press <Enter> in this buffer to refresh results.
-# Example: /aa.*[123]/
+# Example:
+#    -e 'abc'
+#    -e '.*ui'
+#    -g '*.log'
 
-
-[rule]
-# case: support smart, sensitive, insensitive
-case = smart
-whole_word = false
-
-
-#[highlight]
-# similar to [pattern], but this will not used to grep text, only do highlight things
-
-
-#[file_pattern]
-# buf_only = false
-# pattern: used to match file to grep, if not provided, then will grep all
-# pattern = '<regex>'
+#[file]
+# opened_only = false
 ]],
 
     key = {

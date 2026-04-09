@@ -76,7 +76,8 @@ local function open_windows_for_rule_and_result(rule_buf, result_buf)
     end
 end
 
-local function get_rule_section_patterns(rule_buf)
+local function parse_rule_buf(rule_buf)
+    local rule = {}
     local lines = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
     local patterns = {}
     local found_match = false
@@ -84,9 +85,10 @@ local function get_rule_section_patterns(rule_buf)
     local in_match = false
     for _, line in ipairs(lines) do
         local s = line:gsub("%s+$", "")
-        if s:match("^%s*%[match%]%s*$") or s:match("^%s*%[pattern%]%s*$") then
+        if s:match("^%s*%[rg%]%s*$") then
             in_match = true
             found_match = true
+            rule.rg = {}
         elseif in_match then
             -- Stop if another section begins
             if s:match("^%s*%[.+%]%s*$") then
@@ -96,7 +98,7 @@ local function get_rule_section_patterns(rule_buf)
             if s:match("^%s*$") or s:match("^%s*#") then
                 -- ignore
             else
-                local m = s:match("^%s*/(.*)/%s*$")
+                local m = s:match("^%s*(.*)%s*$")
                 table.insert(patterns, m or s)
             end
         end
@@ -115,42 +117,13 @@ local function get_rule_section_patterns(rule_buf)
     return patterns
 end
 
-local function get_rule_options(rule_buf)
-    local lines = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
-    local opts = {}
-    local in_rule = false
-    for _, line in ipairs(lines) do
-        local s = line:gsub("%s+$", "")
-        if s:match("^%s*%[rule%]%s*$") then
-            in_rule = true
-        elseif in_rule then
-            if s:match("^%s*%[.+%]%s*$") then
-                break
-            end
-            if not s:match("^%s*$") and not s:match("^%s*#") then
-                local k, v = s:match("^%s*([%w_]+)%s*=%s*(%w+)%s*$")
-                if k and v then
-                    local vb = v
-                    if vb == 'true' then
-                        vb = true
-                    elseif vb == 'false' then
-                        vb = false
-                    end
-                    opts[k] = vb
-                end
-            end
-        end
-    end
-    return opts
-end
-
 local function get_file_pattern(rule_buf)
     local lines = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
-    local fp = { opened_only = nil, pattern = nil }
+    local fp = { opened_only = nil }
     local in_fp = false
     for _, line in ipairs(lines) do
         local s = line:gsub("%s+$", "")
-        if s:match("^%s*%[file_pattern%]%s*$") then
+        if s:match("^%s*%[file%]%s*$") then
             in_fp = true
         elseif in_fp then
             if s:match("^%s*%[.+%]%s*$") then
@@ -166,9 +139,6 @@ local function get_file_pattern(rule_buf)
                         elseif vb == "false" then
                             fp.opened_only = false
                         end
-                    elseif kb == "pattern" then
-                        vb = vb:gsub("^['\"]", ""):gsub("['\"]$", "")
-                        fp.pattern = vb
                     end
                 end
             end
@@ -236,7 +206,7 @@ local function collect_matches_from_file(source_file, ropts)
    end
 end
 
-local function collect_matches(source_file, patterns, ropts)
+local function collect_matches(source_file, ropts)
     -- Aggregate matches per source line to avoid reordering and to combine highlights
     local results = {}
 
@@ -438,7 +408,7 @@ local function refresh_from_rule(rule_buf)
         local files = collect_valid_files_from_buf(ropts)
 
         for _, file in ipairs(files) do
-            local part = collect_matches(file, ropts)
+            local part = collect_matches_from_file(file, ropts)
             for _, e in ipairs(part) do
                 if not e.is_error and type(e.text) == "string" then
                     local ln = tonumber(e.text:match("^(%d+):"))
@@ -461,7 +431,7 @@ local function refresh_from_rule(rule_buf)
             end
         end
     else
-        results = collect_matches(nil, pats, ropts)
+        results = collect_matches(nil, ropts)
     end
 
     render_results(link.result, results, vim.fn.bufwinid(rule_buf))
