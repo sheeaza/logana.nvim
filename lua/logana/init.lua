@@ -79,203 +79,111 @@ end
 local function parse_rule_buf(rule_buf)
     local rule = {}
     local lines = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
-    local patterns = {}
-    local found_match = false
 
-    local in_match = false
+    local section = ''
     for _, line in ipairs(lines) do
         local s = line:gsub("%s+$", "")
-        if s:match("^%s*%[rg%]%s*$") then
-            in_match = true
-            found_match = true
-            rule.rg = {}
-        elseif in_match then
-            -- Stop if another section begins
-            if s:match("^%s*%[.+%]%s*$") then
-                break
-            end
-            -- Skip comments and empty lines
-            if s:match("^%s*$") or s:match("^%s*#") then
-                -- ignore
-            else
+
+        -- Skip comments and empty lines
+        if s:match("^%s*$") or s:match("^%s*#") then
+            -- ignore
+        else
+            local cur_section = s:match("^%s*%[(.+)%]%s*$")
+            if cur_section then
+                section = cur_section
+                rule[section] = {}
+                rule[section].lines = {}
+            elseif section ~= '' then
                 local m = s:match("^%s*(.*)%s*$")
-                table.insert(patterns, m or s)
+                table.insert(rule[section].lines, m or s)
             end
         end
     end
 
     -- Require an explicit [match] (or [pattern]) section and at least one pattern line
-    if not found_match then
-        vim.notify("[logana] Missing [match] section. Add a [match] section with one ripgrep regex per line.", vim.log.levels.ERROR)
+    if next(rule) == nil then
+        vim.notify("[logana] Missing [rg] section. Add a [rg] section with one ripgrep regex per line.", vim.log.levels.ERROR)
         return nil, "missing_section"
     end
-    if #patterns == 0 then
-        vim.notify("[logana] No patterns under [match]. Add regex rules, one per line.", vim.log.levels.WARN)
+    if next(rule.rg) == nil or next(rule.rg.lines) == nil then
+        vim.notify("[logana] No patterns under [rg]. Add regex rules, one per line.", vim.log.levels.WARN)
         return nil, "empty_patterns"
     end
 
-    return patterns
-end
+    rule.rg.cmd = {}
+    for _, line in ipairs(rule.rg.lines) do
+        for _, arg in ipairs(vim.split(line, ' ')) do
+            table.insert(rule.rg.cmd, arg)
+        end
+    end
 
-local function get_file_pattern(rule_buf)
-    local lines = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
-    local fp = { opened_only = nil }
-    local in_fp = false
-    for _, line in ipairs(lines) do
-        local s = line:gsub("%s+$", "")
-        if s:match("^%s*%[file%]%s*$") then
-            in_fp = true
-        elseif in_fp then
-            if s:match("^%s*%[.+%]%s*$") then
-                break
-            end
-            if not s:match("^%s*$") and not s:match("^%s*#") then
-                local kb, vb = s:match("^%s*([%w_]+)%s*=%s*(.+)%s*$")
-                if kb and vb then
-                    if kb == "opened_only" then
-                        vb = vb:gsub("^['\"]", ""):gsub("['\"]$", "")
-                        if vb == "true" then
-                            fp.opened_only = true
-                        elseif vb == "false" then
-                            fp.opened_only = false
-                        end
-                    end
+    if rule.file and rule.file.lines then
+        for _, line in ipairs(rule.file.lines) do
+            local kb, vb = line:match("^%s*(%S-)%s*=%s*(%S-)%s*$")
+            if kb == "opened_only" then
+                if vb == "true" then
+                    rule.file.opened_only = true
+                elseif vb == "false" then
+                    rule.file.opened_only = false
                 end
             end
         end
     end
-    return fp
+    return rule
 end
 
-local function collect_matches_from_file(source_file, ropts)
-   local args = vim.deepcopy(ropts.args_common)
-   table.insert(args, "-")
-   local ok_sys, proc = pcall(vim.system, args, source_file, { text = true })
-   if not ok_sys or not proc then
-       table.insert(results, { text = "[logana] failed to execute ripgrep", is_error = true })
-       goto continue_pattern
-   end
-   local res = proc:wait()
-   local exit_code = res.code or 0
-   local out = res.stdout or ""
-   local err = res.stderr or ""
-   local stderr_msg = err ~= "" and err or nil
-   local stdout_lines = {}
-
-   for line in (out .. "\n"):gmatch("([^\n]*)\n") do
-       if line ~= "" then
-           table.insert(stdout_lines, line)
-       end
-   end
-
-   if exit_code ~= 0 and #stdout_lines == 0 then
-       table.insert(results, { text = ("[logana] ripgrep error for pattern '%s': %s"):format(pat, stderr_msg or ("exit code " .. tostring(exit_code))), is_error = true })
-       return results
-   end
-
-   local by_line = {}
-   for _, jline in ipairs(stdout_lines) do
-       local okj, ev = pcall(vim.json.decode, jline)
-       if okj and ev and ev.type == "match" and ev.data then
-           local d = ev.data
-           local lnum = d.line_number
-           local text = d.lines and d.lines.text or nil
-           if lnum and type(text) == "string" then
-               local prefix = ("%d: "):format(lnum)
-               local entry = by_line[lnum]
-               if not entry then
-                   entry = { text = prefix .. text:gsub("\n$", ""), highlights = {}, is_error = false }
-                   by_line[lnum] = entry
-               end
-               if d.submatches and #d.submatches > 0 then
-                   for _, sm in ipairs(d.submatches) do
-                       if sm and sm.start and sm["end"] then
-                           table.insert(entry.highlights, { #prefix + sm.start, #prefix + sm["end"], pi })
-                       end
-                   end
-               end
-           end
-       end
-   end
-   local src_lines = api.nvim_buf_get_lines(source_file, 0, -1, false)
-   for idx = 1, #src_lines do
-       local e = by_line[idx]
-       if e then
-           table.insert(results, e)
-       end
-   end
-end
-
-local function collect_matches(source_file, ropts)
-    -- Aggregate matches per source line to avoid reordering and to combine highlights
+local function collect_matches(ropts)
+    -- file-based search across working directory; filter by path_regex if provided
     local results = {}
 
-    local path_regex = ropts and ropts.file_pattern or nil
+    local args = vim.deepcopy(ropts.args_common)
+    local ok_sys, proc = pcall(vim.system, args, { text = true })
+    if not ok_sys or not proc then
+        table.insert(results, { text = "[logana] failed to execute ripgrep", is_error = true })
+        return nil
+    end
+    local res = proc:wait()
+    local exit_code = res.code or 0
+    local out = res.stdout or ""
+    local err = res.stderr or ""
+    local stderr_msg = err ~= "" and err or nil
+    local stdout_lines = {}
+    for line in (out .. "\n"):gmatch("([^\n]*)\n") do
+        if line ~= "" then
+            table.insert(stdout_lines, line)
+        end
+    end
 
-        local stdout_lines = {}
-        local stderr_msg = nil
-        local exit_code = 0
+    if exit_code ~= 0 and #stdout_lines == 0 then
+        table.insert(results, { text = ("[logana] ripgrep error for pattern '%s': %s"):format(pat, stderr_msg or ("exit code " .. tostring(exit_code))), is_error = true })
+        return nil
+    end
 
-        if source_file then
-            results = collect_matches_from_file(file, ropts)
-        else
-            -- file-based search across working directory; filter by path_regex if provided
-            local args = vim.deepcopy(args_common)
-            if use_system then
-                local ok_sys, proc = pcall(vim.system, args, { text = true })
-                if not ok_sys or not proc then
-                    table.insert(results, { text = "[logana] failed to execute ripgrep", is_error = true })
-                    goto continue_pattern
-                end
-                local res = proc:wait()
-                exit_code = res.code or 0
-                local out = res.stdout or ""
-                local err = res.stderr or ""
-                stderr_msg = err ~= "" and err or nil
-                for line in (out .. "\n"):gmatch("([^\n]*)\n") do
-                    if line ~= "" then
-                        table.insert(stdout_lines, line)
-                    end
-                end
-            else
-                local out = fn.systemlist(args)
-                exit_code = vim.v.shell_error or 0
-                stdout_lines = type(out) == "table" and out or {}
+    for _, jline in ipairs(stdout_lines) do
+        local okj, ev = pcall(vim.json.decode, jline)
+        if okj and ev and ev.type == "match" and ev.data then
+            local d = ev.data
+            local lnum = d.line_number
+            local text = d.lines and d.lines.text or nil
+            local path = d.path and d.path.text or nil
+            if path_regex and path and not tostring(path):match(path_regex) then
+                goto continue_event
             end
-
-            if exit_code ~= 0 and #stdout_lines == 0 then
-                table.insert(results, { text = ("[logana] ripgrep error for pattern '%s': %s"):format(pat, stderr_msg or ("exit code " .. tostring(exit_code))), is_error = true })
-                goto continue_pattern
-            end
-
-            for _, jline in ipairs(stdout_lines) do
-                local okj, ev = pcall(vim.json.decode, jline)
-                if okj and ev and ev.type == "match" and ev.data then
-                    local d = ev.data
-                    local lnum = d.line_number
-                    local text = d.lines and d.lines.text or nil
-                    local path = d.path and d.path.text or nil
-                    if path_regex and path and not tostring(path):match(path_regex) then
-                        goto continue_event
-                    end
-                    if path and lnum and type(text) == "string" then
-                        local prefix = ("%s:%d: "):format(path, lnum)
-                        local entry = { text = prefix .. text:gsub("\n$", ""), highlights = {}, is_error = false }
-                        if d.submatches and #d.submatches > 0 then
-                            for _, sm in ipairs(d.submatches) do
-                                if sm and sm.start and sm["end"] then
-                                    table.insert(entry.highlights, { #prefix + sm.start, #prefix + sm["end"], pi })
-                                end
-                            end
+            if path and lnum and type(text) == "string" then
+                local prefix = ("%s:%d: "):format(path, lnum)
+                local entry = { text = prefix .. text:gsub("\n$", ""), highlights = {}, is_error = false }
+                if d.submatches and #d.submatches > 0 then
+                    for _, sm in ipairs(d.submatches) do
+                        if sm and sm.start and sm["end"] then
+                        table.insert(entry.highlights, { #prefix + sm.start, #prefix + sm["end"], pi })
                         end
-                        table.insert(results, entry)
                     end
                 end
-                ::continue_event::
+                table.insert(results, entry)
             end
         end
-
-        ::continue_pattern::
+        ::continue_event::
+    end
 
     return results
 end
@@ -317,7 +225,7 @@ local function render_results(result_buf, results, rule_win)
 end
 
 -- Gather all opened buffers (ignore logana buffers) and optionally filter by pattern
-local function collect_valid_files_from_buf(ropts)
+local function update_cmd_for_opened_only(ropts)
     local nrule = M.config.naming.rule
     local nres = M.config.naming.result
     local sources = {}
@@ -332,39 +240,16 @@ local function collect_valid_files_from_buf(ropts)
             ft = ok_ft and ft or ""
             if ft ~= nrule and ft ~= nres then
                 local rel_path = vim.fn.fnamemodify(abs_path, ":.")
-                if not ropts.file_pattern or tostring(rel_path):match(ropts.file_pattern) then
-                    table.insert(sources, rel_path)
-                end
+                table.insert(ropts.args_common, rel_path)
             end
         end
     end
-
-    return sources
 end
 
 local function get_runtime_opts(rule_buf)
-    local patterns, perr = get_rule_section_patterns(rule_buf)
+    local rule, perr = parse_rule_buf(rule_buf)
     if perr then
-        local msg = perr == "missing_section"
-        and "[logana] Missing [pattern] section. Add a [pattern] section with one ripgrep regex per line."
-        or "[logana] No patterns under [pattern]. Add regex rules, one per line."
-        return nil, msg
-    end
-
-    local ropts = get_rule_options(rule_buf)
-    local fp = get_file_pattern(rule_buf)
-
-    ropts.opened_only = M.config.source.opened_only
-    if fp.opened_only ~= nil then
-        ropts.opened_only = fp.opened_only
-    end
-    ropts.file_pattern = fp.pattern or nil
-
-    if ropts.case == nil then
-        ropts.case = M.config.rg.case
-    end
-    if ropts.whole_word == nil then
-        ropts.whole_word = M.config.rg.whole_word
+        return nil, perr
     end
 
     local args_common = { M.config.rg.cmd }
@@ -372,30 +257,25 @@ local function get_runtime_opts(rule_buf)
         table.insert(args_common, a)
     end
 
-    if ropts.case == "smart" then
-        table.insert(args_common, "--smart-case")
-    elseif ropts.case == "sensitive" then
-        table.insert(args_common, "--case-sensitive")
-    else
-        table.insert(args_common, "--ignore-case")
-    end
-    if ropts.whole_word == true then
-        table.insert(args_common, "--word-regexp")
-    end
-
-    for pi, pat in ipairs(patterns) do
-        table.insert(args_common, "-e")
+    for _, pat in ipairs(rule.rg.cmd) do
         table.insert(args_common, pat)
     end
 
+    local ropts = {}
     ropts.args_common = args_common
+
+    ropts.file = {}
+    ropts.file.opened_only = false
+    if rule.file and rule.file.opened_only then
+        ropts.file = rule.file
+    end
 
     return ropts
 end
 
 local function refresh_from_rule(rule_buf)
     local link = M.state.rule_links[rule_buf]
-    local ropts, err = get_runtime_opts(rule_buf, link.result)
+    local ropts, err = get_runtime_opts(rule_buf)
 
     if err then
         render_results(link.result, { { text = err, is_error = true } }, vim.fn.bufwinid(rule_buf))
@@ -403,35 +283,31 @@ local function refresh_from_rule(rule_buf)
     end
 
     local results = {}
-    if ropts.opened_only then
+    if ropts.file.opened_only then
         -- Gather all opened buffers (ignore logana buffers) and optionally filter by pattern
-        local files = collect_valid_files_from_buf(ropts)
+        update_cmd_for_opened_only(ropts)
+    end
 
-        for _, file in ipairs(files) do
-            local part = collect_matches_from_file(file, ropts)
-            for _, e in ipairs(part) do
-                if not e.is_error and type(e.text) == "string" then
-                    local ln = tonumber(e.text:match("^(%d+):"))
-                    if ln then
-                        local oldp = ("%d: "):format(ln)
-                        local newp = ("%s:%d: "):format(file, ln)
-                        local delta = #newp - #oldp
-                        e.text = newp .. e.text:sub(#oldp + 1)
-                        if e.highlights and #e.highlights > 0 then
-                            for _, h in ipairs(e.highlights) do
-                                h[1] = h[1] + delta
-                                h[2] = h[2] + delta
-                            end
-                        end
-                    else
-                        e.text = ("%s: %s"):format(file, e.text)
+    local part = collect_matches(ropts)
+    for _, e in ipairs(part) do
+        if not e.is_error and type(e.text) == "string" then
+            local ln = tonumber(e.text:match("^(%d+):"))
+            if ln then
+                local oldp = ("%d: "):format(ln)
+                local newp = ("%s:%d: "):format(file, ln)
+                local delta = #newp - #oldp
+                e.text = newp .. e.text:sub(#oldp + 1)
+                if e.highlights and #e.highlights > 0 then
+                    for _, h in ipairs(e.highlights) do
+                        h[1] = h[1] + delta
+                        h[2] = h[2] + delta
                     end
                 end
-                table.insert(results, e)
+            else
+                e.text = ("%s: %s"):format(file, e.text)
             end
         end
-    else
-        results = collect_matches(nil, ropts)
+        table.insert(results, e)
     end
 
     render_results(link.result, results, vim.fn.bufwinid(rule_buf))

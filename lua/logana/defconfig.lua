@@ -64,7 +64,7 @@ local M = {
 #    -g '*.log'
 
 #[file]
-# opened_only = false
+#opened_only = true
 ]],
 
     key = {
