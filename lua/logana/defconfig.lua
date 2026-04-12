@@ -35,22 +35,22 @@ local M = {
     },
 
     -- name assigned to rule/result buffer, will also set them to buffer type
-    -- note: logana_rule_<suffix> will bind to logana_result_<suffix>
+    -- note: logana_rule_<prefix> will bind to logana_result_<prefix>
     --  like: logana_rule_0  <==> logana_result_0
     --
-    -- user can also naming suffix on demands on cmd line,
+    -- user can also naming prefix on demands on cmd line,
     --  <cmd>: Logana custom
     --  then the rule/result name will be, logana_rule_custom, logana_result_custom
     naming = {
         rule = 'logana_rule',
         result = 'logana_result',
 
-        -- suffix appends to name
+        -- prefix appends to name
         -- 'number': 0, 1, 2, 3...
         -- 'alphabet': a, b, c...
-        -- the final name will be: logana_rule|result_<suffix>
-        -- like: logana_rule_0, logana_result_0, logana_rule_a, logana_result_a
-        suffix = 'number',
+        -- the final name will be: <prefix>.logana_(rule|result)
+        -- like: 0.logana_rule, 0.logana_result, a.logana_rule, a.logana_result
+        prefix = 'number',
     },
 
     -- help text put to rule buffer
@@ -63,8 +63,8 @@ local M = {
 #    -e '.*ui'
 #    -g '*.log'
 
-#[file]
-#opened_only = true
+[file]
+opened_only = true
 ]],
 
     key = {
