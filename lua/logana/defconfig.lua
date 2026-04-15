@@ -55,13 +55,14 @@ local M = {
 
     -- help text put to rule buffer
     rule_template = [[
-[rg]
 # below is rg cmd args
 # Press <Enter> in this buffer to refresh results.
 # Example:
 #    -e 'abc'
 #    -e '.*ui'
 #    -g '*.log'
+[rg]
+--smart-case
 
 [file]
 opened_only = true
