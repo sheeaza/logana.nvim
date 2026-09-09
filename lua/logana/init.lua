@@ -8,6 +8,40 @@ local NS_MATCH = api.nvim_create_namespace("logana.match")
 
 local SPLIT_DIR = { top = 'below', bottom = 'above', left = 'right', right = 'left' }
 
+-- match ranges per result buffer, keyed by 0-based row: { [row] = { {start_col, end_col}, ... } }
+-- highlighted lazily via decoration provider (ephemeral extmarks) instead of eagerly,
+-- since eagerly creating one extmark per match makes the first redraw of a large
+-- result buffer (hundreds of thousands of matches) take seconds.
+local RESULT_HIGHLIGHTS = {}
+local decoration_provider_ready = false
+
+local function ensure_decoration_provider()
+    if decoration_provider_ready then
+        return
+    end
+    decoration_provider_ready = true
+
+    api.nvim_set_decoration_provider(NS_MATCH, {
+        on_win = function(_, _, bufnr)
+            return RESULT_HIGHLIGHTS[bufnr] ~= nil
+        end,
+        on_line = function(_, _, bufnr, row)
+            local marks = RESULT_HIGHLIGHTS[bufnr] and RESULT_HIGHLIGHTS[bufnr][row]
+            if not marks then
+                return
+            end
+            for _, hi in ipairs(marks) do
+                api.nvim_buf_set_extmark(bufnr, NS_MATCH, row, hi[1], {
+                    end_row = row,
+                    end_col = hi[2],
+                    hl_group = M.config.hi_group_name,
+                    ephemeral = true,
+                })
+            end
+        end,
+    })
+end
+
 local function get_prefix_and_increase()
     local prefix = ''
     if M.config.naming.prefix == "alphabet" then
@@ -32,7 +66,7 @@ end
 local function create_normal_buffer(name, filetype)
     local buf = api.nvim_create_buf(true, false) -- [listed=true, scratch=false]
     set_buf_opts(buf, {
-        swapfile = true,
+        swapfile = false,
         modifiable = true,
         readonly = false,
         filetype = filetype or "",
@@ -213,8 +247,16 @@ end
 
 local function render_results(result_buf, matches, rule_win)
     local lines = {}
-    local highlights = {}
+    local highlights_by_row = {}
     local cur_line_num = 0
+
+    -- result buffers are fully regenerated on every refresh; there's nothing
+    -- worth undoing to, and snapshotting hundreds of thousands of prior lines
+    -- into the undo tree before each replace made repeated refreshes take seconds.
+    pcall(api.nvim_set_option_value, "undolevels", -1, { buf = result_buf })
+    -- disable swapfile here too, since result buffers reloaded from disk via
+    -- fn.bufadd/fn.bufload bypass create_normal_buffer's swapfile=false
+    pcall(api.nvim_set_option_value, "swapfile", false, { buf = result_buf })
 
     local t0 = vim.uv.now()
     for _, file in ipairs(matches) do
@@ -228,8 +270,12 @@ local function render_results(result_buf, matches, rule_win)
 
             local row = cur_line_num - 1
             local off = #prefix
-            for _, hi in ipairs(line.matches) do
-                table.insert(highlights, { { row, hi[1] + off }, { row, hi[2] + off } })
+            if #line.matches > 0 then
+                local row_marks = {}
+                for _, hi in ipairs(line.matches) do
+                    table.insert(row_marks, { hi[1] + off, hi[2] + off })
+                end
+                highlights_by_row[row] = row_marks
             end
         end
         table.insert(lines, '')
@@ -242,10 +288,8 @@ local function render_results(result_buf, matches, rule_win)
     log.trace(string.format("render_results set lines took: %d ms", vim.uv.now() - t1))
 
     local t2 = vim.uv.now()
-    api.nvim_buf_clear_namespace(result_buf, NS_MATCH, 0, -1)
-    for _, hi in ipairs(highlights) do
-        vim.hl.range(result_buf, NS_MATCH, M.config.hi_group_name, hi[1], hi[2])
-    end
+    ensure_decoration_provider()
+    RESULT_HIGHLIGHTS[result_buf] = highlights_by_row
     log.trace(string.format("render_results hi took: %d ms", vim.uv.now() - t2))
 
     if fn.bufwinid(result_buf) ~= -1 then
@@ -349,6 +393,22 @@ local function initialize_rule_buffer(rule_buf)
     end
 end
 
+local function find_rg_section_end(buf)
+    local lines = api.nvim_buf_get_lines(buf, 0, -1, false)
+    local in_rg = false
+    local last_lnum = nil
+    for i, line in ipairs(lines) do
+        if line:match("^%s*%[rg%]%s*$") then
+            in_rg = true
+        elseif in_rg and line:match("^%s*%[.+%]%s*$") then
+            break
+        elseif in_rg and not line:match("^%s*$") and not line:match("^%s*#") then
+            last_lnum = i
+        end
+    end
+    return last_lnum
+end
+
 local function result_buffer_jump()
     local line = api.nvim_get_current_line()
     local lnum_str = line:match("^(%d+):")
@@ -421,6 +481,18 @@ local function setup_keybinding()
 
     -- Suppress save prompts on quit for rule/result buffers by marking them nomodified
     M._quit_auto = api.nvim_create_augroup("logana_quit_guard", { clear = true })
+
+    -- Disable swapfile for rule/result files regardless of how the buffer is opened
+    -- (create_normal_buffer covers plugin-created buffers, but this covers e.g. a
+    -- user directly `:e`-ing an existing saved rule/result file). Must run on
+    -- BufReadPre/BufNewFile, before Neovim creates the swap file, not FileType.
+    api.nvim_create_autocmd({ "BufNewFile", "BufReadPre" }, {
+        group = M._quit_auto,
+        pattern = { '*.' .. M.config.naming.rule, '*.' .. M.config.naming.result },
+        command = "setlocal noswapfile",
+        desc = "logana: disable swapfile for rule/result files",
+    })
+
     api.nvim_create_autocmd("QuitPre", {
         group = M._quit_auto,
         callback = function()
@@ -466,6 +538,10 @@ function M.is_rule_buffer(buf)
     return ok and ft == M.config.naming.rule
 end
 
+function M.refresh(rule_buf)
+    return refresh_from_rule(rule_buf)
+end
+
 function M.open()
     local naming = M.config.naming
     local rule_buf, prefix
@@ -481,6 +557,11 @@ function M.open()
     until rule_buf
 
     local rule_win = api.nvim_open_win(rule_buf, true, { split = 'right', win = 0 })
+    local rg_end = find_rg_section_end(rule_buf)
+    if rg_end then
+        pcall(api.nvim_win_set_cursor, rule_win, { rg_end, 0 })
+    end
+
     if M.config.result_win.behavior == 'open_with_rule' then
         local result_name = ("%s.%s"):format(prefix, naming.result)
         local result_abs_path = fn.fnamemodify(result_name, ':p')

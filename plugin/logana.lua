@@ -24,9 +24,7 @@ vim.api.nvim_create_user_command("Logana", function(opts)
 
     -- If current buffer is a rule buffer: ensure result exists and refresh
     if logana.is_rule_buffer(curbuf) then
-        logana.ensure_result_for_rule(curbuf)
-        logana.refresh()
-        return
+        return logana.refresh(curbuf)
     end
 
     logana.open()
