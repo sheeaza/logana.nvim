@@ -65,21 +65,6 @@ local function ensure_decoration_provider()
     })
 end
 
-local function get_prefix_and_increase()
-    local prefix = ''
-    if M.config.naming.prefix == "alphabet" then
-        local counter = M._prefix_counter
-        repeat
-            prefix = string.char(string.byte("a") + counter % 26) .. prefix
-            counter = math.floor(counter / 26) - 1
-        until counter < 0
-    else
-        prefix = tostring(M._prefix_counter)
-    end
-    M._prefix_counter = M._prefix_counter + 1
-    return prefix
-end
-
 local function set_buf_opts(buf, opts)
     for k, v in pairs(opts) do
         api.nvim_set_option_value(k, v, { buf = buf })
@@ -100,10 +85,15 @@ local function create_normal_buffer(name, filetype)
 end
 
 local function result_open_win(result_buf, rule_win)
+    if M.config.result_win.behavior == 'override' then
+        api.nvim_win_set_buf(rule_win, result_buf)
+        return
+    end
+
     local split = SPLIT_DIR[M.config.layout.rule_pos] or 'left'
     local t0 = vim.uv.now()
     local result_win = api.nvim_open_win(result_buf, false, { split = split, win = rule_win })
-    log.trace(string.format("render_results openwin took: %d ms", vim.uv.now() - t0))
+    log.trace(string.format("result_open_win took: %d ms", vim.uv.now() - t0))
 
     -- rule and result split the space rule_win had; the +1 is the statusline
     -- or vertical separator between them
@@ -361,7 +351,7 @@ local function collect_highlights(hl_rules, hl_input, hl_rows)
     return by_row
 end
 
-local function render_results(result_buf, matches, rule_win)
+local function render_results(result_buf, matches)
     local lines = {}
     local highlights_by_row = {}
     local hl_texts = {}
@@ -417,16 +407,6 @@ local function render_results(result_buf, matches, rule_win)
     RESULT_HIGHLIGHTS[result_buf] = { match = highlights_by_row, hl = {} }
     log.trace(string.format("render_results hi took: %d ms", vim.uv.now() - t2))
 
-    if fn.bufwinid(result_buf) == -1 then
-        if M.config.result_win.behavior == 'hide_at_first' then
-            result_open_win(result_buf, rule_win)
-        elseif M.config.result_win.behavior == 'override' then
-            if rule_win ~= -1 and api.nvim_win_is_valid(rule_win) then
-                api.nvim_win_set_buf(rule_win, result_buf)
-            end
-        end
-    end
-
     local hl_input = #hl_texts > 0 and table.concat(hl_texts, '\n') .. '\n' or ''
     return hl_input, hl_rows, file_rows
 end
@@ -477,7 +457,7 @@ local function get_runtime_opts(rule_buf)
 
     -- level 1 needs a rerun when the rg args change, or (for opened files) when
     -- a searched file changes on disk; with a directory search there's no cheap
-    -- way to detect file changes, use ':Logana refresh' to force it
+    -- way to detect file changes, see refresh_from_rule
     local sig = { table.concat(args, '\0') }
     if rule.file and rule.file.opened_only then
         for _, f in ipairs(args) do
@@ -498,6 +478,7 @@ local function get_runtime_opts(rule_buf)
         match_sig = table.concat(sig, '\n'),
         hl_rules = rule.hl_rules,
         hl_sig = table.concat(hl_sig, '\n'),
+        opened_only = rule.file and rule.file.opened_only or false,
     }
 end
 
@@ -514,7 +495,7 @@ local function get_result_buf(rule_buf)
             result_buf = fn.bufadd(result_abs_path)
             fn.bufload(result_buf)
         else
-            result_buf = create_normal_buffer(rule_prefix .. '.' .. M.config.naming.result, M.config.naming.result)
+            result_buf = create_normal_buffer(result_abs_path, M.config.naming.result)
         end
     end
     return result_buf
@@ -644,7 +625,9 @@ end
 -- level 1 ([rg] -> result lines) only reruns when its inputs changed, or the result
 -- buffer is gone / was edited since we rendered it. level 2 ([highlight]) reruns
 -- whenever level 1 did, or when the [highlight] rules changed.
-local function refresh_from_rule(rule_buf, force)
+-- with opened_only = false, changes to the files under cwd can't be detected, so
+-- a refresh where nothing else changed reruns level 1 too.
+local function refresh_from_rule(rule_buf)
     local ropts, err = get_runtime_opts(rule_buf)
     if err then
         return nil, "get runtime opts failed"
@@ -665,7 +648,9 @@ local function refresh_from_rule(rule_buf, force)
     local result_intact = st.result_buf and api.nvim_buf_is_valid(st.result_buf)
         and not st.result_dirty and RESULT_HIGHLIGHTS[st.result_buf] ~= nil
 
-    if force or not result_intact or st.match_sig ~= ropts.match_sig then
+    local unchanged = st.hl_sig == ropts.hl_sig and not fold_edited
+    if not result_intact or st.match_sig ~= ropts.match_sig
+        or (unchanged and not ropts.opened_only) then
         local t0 = vim.uv.now()
         local matches, merr = collect_matches(ropts)
         if merr then
@@ -675,7 +660,7 @@ local function refresh_from_rule(rule_buf, force)
 
         local result_buf = get_result_buf(rule_buf)
         local t1 = vim.uv.now()
-        st.hl_input, st.hl_rows, st.file_rows = render_results(result_buf, matches, fn.bufwinid(rule_buf))
+        st.hl_input, st.hl_rows, st.file_rows = render_results(result_buf, matches)
         log.trace(string.format("render_results took: %d ms", vim.uv.now() - t1))
 
         -- track user edits of the result buffer (changedtick can't be used, ':w'
@@ -707,6 +692,12 @@ local function refresh_from_rule(rule_buf, force)
         rerendered = true
     end
 
+    -- show the result buffer if it isn't, e.g. first refresh or its window was closed
+    if fn.bufwinid(st.result_buf) == -1 then
+        local rule_win = fn.bufwinid(rule_buf)
+        result_open_win(st.result_buf, rule_win ~= -1 and rule_win or api.nvim_get_current_win())
+    end
+
     if st.hl_sig ~= ropts.hl_sig then
         local t2 = vim.uv.now()
         RESULT_HIGHLIGHTS[st.result_buf].hl = collect_highlights(ropts.hl_rules, st.hl_input, st.hl_rows)
@@ -718,13 +709,6 @@ local function refresh_from_rule(rule_buf, force)
 
     if rerendered or fold_edited then
         restore_folds(rule_buf, st)
-    end
-end
-
-local function initialize_rule_buffer(rule_buf)
-    local curr = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
-    if #curr == 0 or (#curr == 1 and curr[1] == "") then
-        api.nvim_buf_set_lines(rule_buf, 0, -1, false, vim.split(M.config.rule_template, '\n'))
     end
 end
 
@@ -742,6 +726,27 @@ local function find_rg_section_end(buf)
         end
     end
     return last_lnum
+end
+
+-- fill an empty rule buffer with the template, however it was opened
+-- (:e, :new, a session...), and put the cursor where the [rg] args go
+local function initialize_rule_buffer(rule_buf)
+    local curr = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
+    if not (#curr == 0 or (#curr == 1 and curr[1] == "")) then
+        return
+    end
+    -- keep the template out of undo history, 'u' shouldn't empty the buffer
+    local undolevels = api.nvim_get_option_value('undolevels', { buf = rule_buf })
+    api.nvim_set_option_value('undolevels', -1, { buf = rule_buf })
+    api.nvim_buf_set_lines(rule_buf, 0, -1, false, vim.split(M.config.rule_template, '\n'))
+    api.nvim_set_option_value('undolevels', undolevels, { buf = rule_buf })
+
+    local rg_end = find_rg_section_end(rule_buf)
+    if rg_end then
+        for _, win in ipairs(fn.win_findbuf(rule_buf)) do
+            pcall(api.nvim_win_set_cursor, win, { rg_end, 0 })
+        end
+    end
 end
 
 local function result_buffer_jump()
@@ -808,7 +813,6 @@ local function setup_config(opts)
     end
 
     setup_highlights()
-    M._prefix_counter = 0
 
     vim.filetype.add({
         extension = {
@@ -859,11 +863,12 @@ local function setup_keybinding()
         group = M._quit_auto,
         pattern = M.config.naming.rule,
         callback = function(ev)
+            initialize_rule_buffer(ev.buf)
             vim.keymap.set("n", M.config.key.rule_refresh, function()
                 refresh_from_rule(ev.buf)
             end, { buffer = ev.buf, noremap = true, silent = true, desc = "logana: refresh results" })
         end,
-        desc = "logana: keybinding for rule file",
+        desc = "logana: template and keybinding for rule file",
     })
 
     api.nvim_create_autocmd("FileType", {
@@ -905,45 +910,9 @@ local function setup_keybinding()
     })
 end
 
-function M.is_rule_buffer(buf)
-    local ok, ft = pcall(api.nvim_get_option_value, "filetype", { buf = buf })
-    return ok and ft == M.config.naming.rule
-end
-
--- opts.force: rerun level 1 even if nothing seems changed
-function M.refresh(rule_buf, opts)
-    return refresh_from_rule(rule_buf, opts and opts.force)
-end
-
-function M.open()
-    local naming = M.config.naming
-    local rule_buf, prefix
-
-    repeat
-        prefix = get_prefix_and_increase()
-        local rule_name = ("%s.%s"):format(prefix, naming.rule)
-        local ok, stats = pcall(vim.uv.fs_stat, rule_name)
-        if not (ok and stats) then
-            rule_buf = create_normal_buffer(rule_name, naming.rule)
-            initialize_rule_buffer(rule_buf)
-        end
-    until rule_buf
-
-    local rule_win = api.nvim_open_win(rule_buf, true, { split = 'right', win = 0 })
-    local rg_end = find_rg_section_end(rule_buf)
-    if rg_end then
-        pcall(api.nvim_win_set_cursor, rule_win, { rg_end, 0 })
-    end
-
-    if M.config.result_win.behavior == 'open_with_rule' then
-        local result_name = ("%s.%s"):format(prefix, naming.result)
-        local result_abs_path = fn.fnamemodify(result_name, ':p')
-        local result_buf = fn.bufnr(result_abs_path)
-        if result_buf == -1 then
-            result_buf = create_normal_buffer(result_name, naming.result)
-        end
-        result_open_win(result_buf, rule_win)
-    end
+-- same as pressing <Enter> in rule_buf
+function M.refresh(rule_buf)
+    return refresh_from_rule(rule_buf)
 end
 
 function M.setup(opts)

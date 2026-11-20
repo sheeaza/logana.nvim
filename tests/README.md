@@ -19,7 +19,7 @@ Each test prints one line, followed by a summary:
 ok   level 1 lists matched lines with one shared color
 ok   level 2 colors each [highlight] line separately, using rg syntax
 ...
-16/16 passed
+20/20 passed
 ```
 
 The exit code is `0` if every test passed and `1` otherwise, so the command can be
@@ -46,8 +46,10 @@ runner adds the repo to `runtimepath` itself.
   - level 2 (`[highlight]`) runs one `rg` per `[highlight]` line that has a pattern;
   - `0` means nothing re-ran.
 - For every test, wipes all buffers, `cd`s into a new temp dir, writes a small
-  `a.log`, opens it, and runs `:Logana`. Rule and result files are created
-  relative to cwd, so each test starts with nothing left over from the previous one.
+  `a.log`, opens it, and opens `0.logana_rule` in a split. Rule and result files are
+  created relative to cwd, so each test starts with nothing left over from the previous one.
+- Turns on `filetype` detection, which `-u NONE` leaves off; rule buffers are set up
+  by their `FileType` autocmd.
 - Reads the computed highlights from `require("logana")._result_highlights` and
   turns them into readable strings:
 
@@ -68,8 +70,8 @@ drawn.
 | Helper | Purpose |
 | --- | --- |
 | `setup_session()` | Fresh temp dir with `a.log` opened and a new rule buffer; returns the rule bufnr |
-| `set_rule(rule_buf, rg, hl)` | Replace the rule buffer with the given `[rg]` lines, `opened_only = true`, and the given `[highlight]` lines |
-| `refresh(rule_buf, force)` | Same as pressing `<CR>` (or `:Logana refresh` when `force` is true); returns the number of `rg` runs |
+| `set_rule(rule_buf, rg, hl, opened_only)` | Replace the rule buffer with the given `[rg]` lines, `opened_only` (default `true`), and the given `[highlight]` lines |
+| `refresh(rule_buf)` | Same as pressing `<CR>` in the rule buffer; returns the number of `rg` runs |
 | `result_lines()` | Lines of `0.logana_result` |
 | `highlighted()` | All highlights in the result buffer, in the `match:`/`hl:` string format above |
 | `eq(expected, actual, what)` | Deep-equal assertion |
@@ -88,7 +90,7 @@ end)
 ```
 
 To test with different log content, overwrite `a.log` after `setup_session()` and
-call `refresh(rule, true)`, as the multibyte test does.
+call `refresh(rule)`; with `opened_only = true` the change is detected, as the multibyte test shows.
 
 ## CI
 

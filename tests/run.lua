@@ -4,7 +4,8 @@
 
 local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
 vim.opt.rtp:prepend(root)
-vim.cmd("runtime plugin/logana.lua")
+-- -u NONE leaves filetype detection off, rule buffers are found by filetype
+vim.cmd("filetype on")
 
 local api = vim.api
 local L = require("logana")
@@ -31,23 +32,23 @@ local function setup_session()
     vim.fn.chdir(dir)
     vim.fn.writefile(LOG, "a.log")
     vim.cmd("edit a.log")
-    L._prefix_counter = 0
-    L.open()
+    vim.cmd("vsplit 0.logana_rule")
     return api.nvim_get_current_buf()
 end
 
-local function set_rule(rule_buf, rg, hl)
+local function set_rule(rule_buf, rg, hl, opened_only)
     local lines = { "[rg]" }
     vim.list_extend(lines, rg)
-    vim.list_extend(lines, { "[file]", "opened_only = true", "[highlight]" })
+    vim.list_extend(lines, { "[file]", "opened_only = " .. tostring(opened_only ~= false), "[highlight]" })
     vim.list_extend(lines, hl or {})
     api.nvim_buf_set_lines(rule_buf, 0, -1, false, lines)
 end
 
--- refreshes and returns how many rg processes were spawned
-local function refresh(rule_buf, force)
+-- refreshes (same as <Enter> in the rule buffer) and returns how many rg
+-- processes were spawned
+local function refresh(rule_buf)
     rg_calls = 0
-    L.refresh(rule_buf, { force = force })
+    L.refresh(rule_buf)
     return rg_calls
 end
 
@@ -87,6 +88,46 @@ local function eq(expected, actual, what)
     end
 end
 
+test("opening a new rule file fills the template, outside undo history", function()
+    setup_session()
+    local rule = api.nvim_get_current_buf()
+    eq(vim.split(L.config.rule_template, "\n"), api.nvim_buf_get_lines(rule, 0, -1, false), "template")
+    eq("--smart-case", api.nvim_get_current_line(), "cursor on the last [rg] line")
+    vim.cmd("silent! undo")
+    eq(vim.split(L.config.rule_template, "\n"), api.nvim_buf_get_lines(rule, 0, -1, false), "after undo")
+end)
+
+test("opening an existing rule file keeps its content", function()
+    setup_session()
+    vim.fn.writefile({ "[rg]", "-e 'busy'" }, "saved.logana_rule")
+    vim.cmd("edit saved.logana_rule")
+    eq({ "[rg]", "-e 'busy'" }, api.nvim_buf_get_lines(0, 0, -1, false))
+end)
+
+test("refresh opens the result window, also after it was closed", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" })
+    eq(-1, vim.fn.bufwinid("0.logana_result"), "not shown before the first refresh")
+    refresh(rule)
+    local win = vim.fn.bufwinid(result_buf())
+    eq(true, win ~= -1, "shown after refresh")
+    api.nvim_win_close(win, true)
+    refresh(rule)
+    eq(true, vim.fn.bufwinid(result_buf()) ~= -1, "shown again")
+end)
+
+test("result buffer sits next to a rule file opened from another directory", function()
+    setup_session()
+    vim.fn.mkdir("sub", "p")
+    vim.cmd("edit sub/x.logana_rule")
+    local rule = api.nvim_get_current_buf()
+    set_rule(rule, { "-e 'resource'" })
+    refresh(rule)
+    local rb = vim.fn.bufnr(vim.fn.fnamemodify("sub/x.logana_result", ":p"))
+    eq(true, rb ~= -1, "result named next to the rule file")
+    eq(0, refresh(rule), "found again, nothing reruns")
+end)
+
 test("level 1 lists matched lines with one shared color", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'", "-e 'hardware'" })
@@ -125,6 +166,8 @@ end)
 
 test("rule window gets layout.rule_window percent of the rule/result split", function()
     local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" })
+    refresh(rule)
     local rule_win = vim.fn.bufwinid(rule)
     local result_win = vim.fn.bufwinid(result_buf())
     local total = api.nvim_win_get_height(rule_win) + api.nvim_win_get_height(result_win) + 1
@@ -251,18 +294,20 @@ test("result buffer edited: level 1 reruns; :w alone does not", function()
     eq("file: a.log", result_lines()[1])
 end)
 
-test("force reruns level 1 and 2", function()
+test("opened_only = false: nothing changed reruns level 1, [highlight] change only level 2", function()
     local rule = setup_session()
-    set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
-    refresh(rule)
-    eq(2, refresh(rule, true), "rg calls")
+    set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" }, false)
+    eq(2, refresh(rule), "first refresh")
+    eq(2, refresh(rule), "nothing changed: cwd files may have, rerun both")
+    set_rule(rule, { "-e 'resource'" }, { "-e 'retry'" }, false)
+    eq(1, refresh(rule), "only [highlight] changed")
 end)
 
 test("level 2 columns are right with multibyte text and ':' in lines", function()
     local rule = setup_session()
     vim.fn.writefile({ "日本: resource a:b busy", "x resource 日本 busy" }, "a.log")
     set_rule(rule, { "-e 'resource'" }, { "-e 'busy'", "-e 'a:b'" })
-    refresh(rule, true)
+    refresh(rule)
     eq({
         "match:1:resource", "hl:1:busy:1", "hl:1:a:b:2",
         "match:2:resource", "hl:2:busy:1",
