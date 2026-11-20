@@ -65,6 +65,25 @@ Numbers are for the `large` case of `tests/bench.lua` (740k result lines), see
   get colors while level 1 still loads, and level 1 no longer collects the level 2
   input: `large` total 5097 -> 1298 ms, RSS 1471 -> 224 MB, one screen ~25 ms.
 
+## Cleanup
+
+From a review of the modules after the split.
+- [x] `log.lua` is vlog with its defaults: every `log.trace` appends to
+  `stdpath('data')/vlog.nvim.log` (open/write/close, `debug.getinfo`, `os.date`),
+  ~10 lines per refresh and one per lazy level 2 request, growing forever. Only
+  `tests/bench.lua` reads the traces, and it replaces `log.trace`: make it a no-op.
+  Done, `log.lua` is 5 lines now.
+- [ ] Free a result's state on `BufWipeout`: `highlight.by_buf[buf]` (the match
+  arrays, tens of MB on `large`) and `refresh.state[rule_buf]` are never cleared.
+- [ ] Skip one copy per level 1 batch: the pump makes `data:sub(1, cut)` to drop the
+  partial last line; the ffi scanner could take `cut` as its length. Measure first.
+- [ ] Drop the `pcall`s around `vim.uv.fs_stat` (returns nil, doesn't throw) and
+  around 'filetype' lookups on valid buffers.
+- [ ] The first level 1 write clearing the previous result (738k lines) blocks ~245
+  ms, the largest `max_batch`, with either parser. Find out where it goes.
+- [ ] Maybe: require LuaJIT and drop the lua parser (~100 lines, the `write`/pump
+  branches, half the test runtime). Costs the few platforms built with PUC Lua.
+
 ## References
 
 Read 2026-11-20, shallow clones of github.com/variar/klogg and github.com/tstack/lnav.
