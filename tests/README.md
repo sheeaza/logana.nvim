@@ -1,7 +1,7 @@
 # Tests
 
 The tests are plain Lua scripts run by Neovim in headless mode. They need no test
-framework or plugin manager, only `nvim` (0.10+) and `rg` on `PATH`.
+framework or plugin manager, only `nvim` (tested with 0.12) and `rg` on `PATH`.
 
 ## Running
 
@@ -89,3 +89,9 @@ end)
 
 To test with different log content, overwrite `a.log` after `setup_session()` and
 call `refresh(rule, true)`, as the multibyte test does.
+
+## CI
+
+`.github/workflows/test.yml` runs the same command on GitHub Actions for every
+push and pull request. It runs against the latest Neovim release (v0.12.6) and
+nightly, with ripgrep from Ubuntu's packages.
