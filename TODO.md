@@ -15,4 +15,7 @@ Numbers are for the `large` case of `tests/bench.lua` (740k result lines), see
   slow ones (30-100 ms) are GC steps, and the first write (~75 ms) replacing the old
   result. Instead made less garbage per line (positions for `<lnum>: ` and the text):
   `large` total 2727 -> 2048 ms.
-- [ ] Later, if still worth it: `collect_highlights` (148 ms), save/restore folds.
+- [ ] ~~Later, if still worth it: `collect_highlights`, save/restore folds~~: cancelled.
+  `collect_highlights` is ~100 ms on `large`, but the bench's [highlight] rules match
+  few lines; it runs synchronously (blocks for its whole time) and grows with the
+  number of highlight matches, so revisit if broad [highlight] rules get slow.
