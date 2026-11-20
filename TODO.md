@@ -84,6 +84,12 @@ From a review of the modules after the split.
   around 'filetype' lookups on valid buffers.
 - [ ] The first level 1 write clearing the previous result (738k lines) blocks ~245
   ms, the largest `max_batch`, with either parser. Find out where it goes.
+  Found: clearing the 738k lines alone takes ~55 ms, but ~250 ms while rg runs. Even
+  an rg writing to /dev/null, that neovim never reads, makes it 4-5x slower, so it's
+  contention between the processes (8-thread laptop; the 20-thread desktop showed
+  ~75 ms), not the folds, `nvim_buf_call`, the attach or how the buffer was built.
+  The fix would be clearing before rg starts, but then a search with no match no
+  longer keeps the old result. Open: worth that trade?
 - [ ] Maybe: require LuaJIT and drop the lua parser (~100 lines, the `write`/pump
   branches, half the test runtime). Costs the few platforms built with PUC Lua.
 
