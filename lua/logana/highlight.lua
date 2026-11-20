@@ -19,7 +19,8 @@ local NS_MATCH = api.nvim_create_namespace("logana.match")
 --     -- level 2, [highlight], computed for rows as they're drawn, see highlight_rows.
 --     -- false: asked for, or no match. replaced when the rules change
 --     hl = { [row] = { {start_col, end_col, hl_idx}, ... } | false },
---     hl_rules = <rg args lists>, warned = { [rule idx] = true }, pending = <requests running>,
+--     hl_rules = <rg args lists>, warned = { [rule idx] = true }, pending = <requests not done>,
+--     busy = <a request runs>, queued = <rows for the next one>, queued_n = <requests in it>,
 -- }
 -- highlighted lazily via decoration provider (ephemeral extmarks) instead of eagerly,
 -- since eagerly creating one extmark per match makes the first redraw of a large
@@ -44,6 +45,34 @@ end
 -- result buffer -> rows drawn without level 2 ranges yet, asked for in on_end
 local HL_WANT = {}
 local highlight_rows
+
+-- asks for level 2 of rows, outside the redraw, which shouldn't start processes.
+-- one request per buffer at a time: rows drawn while it runs wait in hls.queued
+-- and go in the next one together, else holding a scroll key started one rg per
+-- rule per redraw
+local function start_rows(bufnr, hls, rows, n)
+    hls.busy = true
+    vim.schedule(function()
+        highlight_rows(bufnr, hls, rows, function()
+            hls.pending = hls.pending - n
+            local queued, queued_n = hls.queued, hls.queued_n
+            hls.queued, hls.queued_n, hls.busy = nil, 0, false
+            if queued then
+                start_rows(bufnr, hls, queued, queued_n)
+            end
+        end)
+    end)
+end
+
+local function request_rows(bufnr, hls, rows)
+    -- counted here, not when it runs, so tests waiting on it can't miss it
+    hls.pending = hls.pending + 1
+    if not hls.busy then
+        return start_rows(bufnr, hls, rows, 1)
+    end
+    hls.queued = vim.list_extend(hls.queued or {}, rows)
+    hls.queued_n = (hls.queued_n or 0) + 1
+end
 
 local function ensure_decoration_provider()
     if decoration_provider_ready then
@@ -80,14 +109,7 @@ local function ensure_decoration_provider()
                 HL_WANT[bufnr] = nil
                 local hls = RESULT_HIGHLIGHTS[bufnr]
                 if hls then
-                    -- counted here, not when it runs, so tests waiting on it can't miss it
-                    hls.pending = hls.pending + 1
-                    -- outside the redraw, which shouldn't start processes.
-                    -- shortcut: one rg per rule per redraw with new rows, not throttled;
-                    -- batch them if holding a scroll key spawns too many
-                    vim.schedule(function()
-                        highlight_rows(bufnr, hls, rows, function() hls.pending = hls.pending - 1 end)
-                    end)
+                    request_rows(bufnr, hls, rows)
                 end
             end
         end,

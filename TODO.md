@@ -105,8 +105,13 @@ growing log appended is out of scope.
   Measured, no change needed: 10k files (the same log split), folds ~10-20 ms, also
   with all closed, see `tests/README.md`. `max_batch` is ~100 ms there vs ~65 ms on
   one file, for the `:read` item below.
-- [ ] Scrolling: level 2 starts one rg per rule on every redraw with new rows, holding
+- [x] Scrolling: level 2 starts one rg per rule on every redraw with new rows, holding
   `<C-d>` can start dozens. Debounce the requests from `on_end`.
+  Done as a throttle instead, no delay when idle: one request per buffer at a time, rows
+  drawn meanwhile go in the next one together. 200 `<C-d>` + redraws, headless, 3
+  rules, neovim's CPU (no rules: 95 / 168 ms): 2 ms apart 493 -> 256 ms, 600 -> ~370
+  rg runs; 33 ms apart (key repeat) unchanged at ~595 ms, each request is done
+  before the next redraw. So level 2 costs ~2 ms of CPU per screen of new rows.
 - [ ] `:read` (~248 ms, ~55 of it clearing the old result) is neovim's memline. Find
   out where it goes (`perf`), whether any of it can be avoided from Lua.
 
