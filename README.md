@@ -55,6 +55,13 @@ Pressing `<Enter>` checks each level in turn and only reruns what changed:
 - Otherwise level 2 reruns, but only if `[highlight]` changed.
 - `:Logana refresh` in the rule buffer forces both levels to rerun. Use this when `opened_only = false` and files under cwd changed.
 
+### Folding
+The result buffer has one fold per file, so `za`/`zc`/`zo`/`zM`/`zR` work on whole files.
+The folded files are kept in the rule buffer under `[fold]`, one per line. That section
+is updated when you leave the result window or refresh, and is saved with the rule file.
+If it is missing, it is added the first time a file is folded. Editing `[fold]` by hand
+and pressing `<Enter>` applies it.
+
 ## Commands
 - `:Logana`: in a rule buffer, refresh as described above. Anywhere else, open a new rule/result pair.
 - `:Logana refresh`: in a rule buffer, force a full refresh.

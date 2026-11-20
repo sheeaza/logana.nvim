@@ -19,7 +19,7 @@ Each test prints one line, followed by a summary:
 ok   level 1 lists matched lines with one shared color
 ok   level 2 colors each [highlight] line separately, using rg syntax
 ...
-13/13 passed
+16/16 passed
 ```
 
 The exit code is `0` if every test passed and `1` otherwise, so the command can be

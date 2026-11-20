@@ -367,6 +367,7 @@ local function render_results(result_buf, matches, rule_win)
     local hl_texts = {}
     local hl_rows = {}
     local hl_bytes = 0
+    local file_rows = {}
     local cur_line_num = 0
 
     -- result buffers are fully regenerated on every refresh; there's nothing
@@ -381,6 +382,7 @@ local function render_results(result_buf, matches, rule_win)
     for _, file in ipairs(matches) do
         table.insert(lines, "file: " .. file.file_name)
         cur_line_num = cur_line_num + 1
+        table.insert(file_rows, { cur_line_num, file.file_name })
 
         for _, line in ipairs(file.lines) do
             local prefix = ("%d: "):format(line.line_number)
@@ -426,7 +428,7 @@ local function render_results(result_buf, matches, rule_win)
     end
 
     local hl_input = #hl_texts > 0 and table.concat(hl_texts, '\n') .. '\n' or ''
-    return hl_input, hl_rows
+    return hl_input, hl_rows, file_rows
 end
 
 local function get_valid_opened_files()
@@ -518,6 +520,127 @@ local function get_result_buf(rule_buf)
     return result_buf
 end
 
+-- folding: each 'file: ' header in a result buffer starts a fold that runs to the
+-- next header. which files are folded is kept in the rule buffer's [fold] section
+-- (one file per line), so it survives refreshes and is saved with the rule file.
+-- folds are manual, made from the header rows recorded at render time, since
+-- foldexpr is evaluated per line and made refreshing a large result ~30% slower.
+
+local function setup_fold_win(win)
+    api.nvim_set_option_value('foldmethod', 'manual', { win = win, scope = 'local' })
+    api.nvim_set_option_value('foldenable', true, { win = win, scope = 'local' })
+end
+
+-- returns the [fold] lines, and the 0-based [start, end) range of its body
+-- (nil when there is no [fold] section)
+local function read_fold_section(rule_buf)
+    local lines = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
+    local files, body_start, body_end = {}, nil, #lines
+    for i, line in ipairs(lines) do
+        local section = line:match("^%s*%[(.+)%]%s*$")
+        if section then
+            if body_start then
+                body_end = i - 1
+                break
+            end
+            if section == 'fold' then
+                body_start = i
+            end
+        elseif body_start and not line:match("^%s*$") and not line:match("^%s*#") then
+            table.insert(files, vim.trim(line))
+        end
+    end
+    -- keep the blank line separating [fold] from a following section
+    while body_start and body_end > body_start and lines[body_end]:match("^%s*$") do
+        body_end = body_end - 1
+    end
+    return files, body_start, body_end
+end
+
+local function write_fold_section(rule_buf, files)
+    local cur, body_start, body_end = read_fold_section(rule_buf)
+    if vim.deep_equal(cur, files) then
+        return
+    end
+    if body_start then
+        -- comments in the section are dropped along with the old entries
+        api.nvim_buf_set_lines(rule_buf, body_start, body_end, false, files)
+    elseif #files > 0 then
+        local new = { '', '[fold]' }
+        vim.list_extend(new, files)
+        api.nvim_buf_set_lines(rule_buf, -1, -1, false, new)
+    end
+end
+
+-- folded files in win; nil when the rows from the last render can't be trusted
+local function capture_folds(st, win)
+    if st.result_dirty or not st.file_rows then
+        return nil
+    end
+    local files = {}
+    api.nvim_win_call(win, function()
+        if not vim.wo.foldenable then
+            return
+        end
+        for _, fr in ipairs(st.file_rows) do
+            if fn.foldclosed(fr[1]) ~= -1 then
+                table.insert(files, fr[2])
+            end
+        end
+    end)
+    return files
+end
+
+local function apply_folds(st, win, files)
+    if st.result_dirty or not st.file_rows then
+        return
+    end
+    setup_fold_win(win)
+    local closed = {}
+    for _, f in ipairs(files) do
+        closed[f] = true
+    end
+    local rows = st.file_rows
+    local last = api.nvim_buf_line_count(st.result_buf)
+    api.nvim_win_call(win, function()
+        vim.cmd('silent! normal! zE')
+        for i, fr in ipairs(rows) do
+            local fold_end = rows[i + 1] and rows[i + 1][1] - 1 or last
+            -- ':fold' leaves the new fold closed
+            vim.cmd(('silent! %d,%dfold'):format(fr[1], fold_end))
+            if not closed[fr[2]] then
+                vim.cmd(('silent! %dfoldopen'):format(fr[1]))
+            end
+        end
+    end)
+end
+
+local function rule_state_of_result(result_buf)
+    for rule_buf, st in pairs(RULE_STATE) do
+        if st.result_buf == result_buf and api.nvim_buf_is_valid(rule_buf) then
+            return rule_buf, st
+        end
+    end
+end
+
+-- result window -> rule buffer: record which files are folded in win
+local function save_folds(rule_buf, st, win)
+    local files = capture_folds(st, win)
+    if files then
+        write_fold_section(rule_buf, files)
+        st.fold_sig = table.concat(files, '\n')
+    end
+end
+
+-- rule buffer -> result windows
+local function restore_folds(rule_buf, st)
+    local files = read_fold_section(rule_buf)
+    for _, win in ipairs(fn.win_findbuf(st.result_buf)) do
+        apply_folds(st, win, files)
+    end
+    st.fold_sig = table.concat(files, '\n')
+end
+
 -- level 1 ([rg] -> result lines) only reruns when its inputs changed, or the result
 -- buffer is gone / was edited since we rendered it. level 2 ([highlight]) reruns
 -- whenever level 1 did, or when the [highlight] rules changed.
@@ -529,6 +652,15 @@ local function refresh_from_rule(rule_buf, force)
 
     local st = RULE_STATE[rule_buf] or {}
     RULE_STATE[rule_buf] = st
+
+    -- record the result window's folds before re-rendering, unless [fold] was
+    -- edited by hand since, then that wins and is applied below
+    local fold_edited = table.concat(read_fold_section(rule_buf), '\n') ~= st.fold_sig
+    local fold_win = st.result_buf and api.nvim_buf_is_valid(st.result_buf) and fn.bufwinid(st.result_buf) or -1
+    if not fold_edited and fold_win ~= -1 then
+        save_folds(rule_buf, st, fold_win)
+    end
+    local rerendered = false
 
     local result_intact = st.result_buf and api.nvim_buf_is_valid(st.result_buf)
         and not st.result_dirty and RESULT_HIGHLIGHTS[st.result_buf] ~= nil
@@ -543,7 +675,7 @@ local function refresh_from_rule(rule_buf, force)
 
         local result_buf = get_result_buf(rule_buf)
         local t1 = vim.uv.now()
-        st.hl_input, st.hl_rows = render_results(result_buf, matches, fn.bufwinid(rule_buf))
+        st.hl_input, st.hl_rows, st.file_rows = render_results(result_buf, matches, fn.bufwinid(rule_buf))
         log.trace(string.format("render_results took: %d ms", vim.uv.now() - t1))
 
         -- track user edits of the result buffer (changedtick can't be used, ':w'
@@ -572,6 +704,7 @@ local function refresh_from_rule(rule_buf, force)
         st.result_dirty = false
         st.match_sig = ropts.match_sig
         st.hl_sig = nil
+        rerendered = true
     end
 
     if st.hl_sig ~= ropts.hl_sig then
@@ -581,6 +714,10 @@ local function refresh_from_rule(rule_buf, force)
         st.hl_sig = ropts.hl_sig
         -- decoration provider marks are ephemeral; force visible windows to redraw them
         pcall(api.nvim__redraw, { buf = st.result_buf, valid = false })
+    end
+
+    if rerendered or fold_edited then
+        restore_folds(rule_buf, st)
     end
 end
 
@@ -735,6 +872,34 @@ local function setup_keybinding()
         callback = function(ev)
             vim.keymap.set("n", M.config.key.result_jump, result_buffer_jump,
                 { buffer = ev.buf, noremap = true, silent = true, desc = "logana: results jump" })
+
+            local group = api.nvim_create_augroup("logana_fold_" .. ev.buf, { clear = true })
+            api.nvim_create_autocmd("BufWinEnter", {
+                group = group,
+                buffer = ev.buf,
+                callback = function()
+                    local rule_buf, st = rule_state_of_result(ev.buf)
+                    if rule_buf then
+                        restore_folds(rule_buf, st)
+                    else
+                        for _, win in ipairs(fn.win_findbuf(ev.buf)) do
+                            setup_fold_win(win)
+                        end
+                    end
+                end,
+                desc = "logana: fold result buffer by file",
+            })
+            api.nvim_create_autocmd("WinLeave", {
+                group = group,
+                buffer = ev.buf,
+                callback = function()
+                    local rule_buf, st = rule_state_of_result(ev.buf)
+                    if rule_buf then
+                        save_folds(rule_buf, st, api.nvim_get_current_win())
+                    end
+                end,
+                desc = "logana: save result folds to the rule buffer",
+            })
         end,
         desc = "logana: keybinding for jumping in result buf",
     })

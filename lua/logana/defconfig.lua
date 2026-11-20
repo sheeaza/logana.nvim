@@ -86,6 +86,13 @@ opened_only = true
 # a line with only flags (no pattern) applies to every line
 [highlight]
 --smart-case
+
+# files folded in the result buffer, one per line, kept in sync with the result window
+# Example:
+#    [fold]
+#    a.log
+#    logs/b.log
+[fold]
 ]],
 
     key = {

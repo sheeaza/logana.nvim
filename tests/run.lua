@@ -131,6 +131,81 @@ test("rule window gets layout.rule_window percent of the rule/result split", fun
     eq(math.floor(total * tonumber(L.config.layout.rule_window) / 100), api.nvim_win_get_height(rule_win))
 end)
 
+-- session searching a.log and b.log; returns the rule bufnr
+local function setup_two_files()
+    local rule = setup_session()
+    vim.fn.writefile(LOG, "b.log")
+    vim.fn.bufload(vim.fn.bufadd("b.log"))
+    return rule
+end
+
+-- { [file] = true } for files whose fold is closed in the result window
+local function folded_files()
+    local out = {}
+    local win = vim.fn.bufwinid(result_buf())
+    api.nvim_win_call(win, function()
+        for lnum, line in ipairs(result_lines()) do
+            local file = line:match("^file: (.*)")
+            if file and vim.fn.foldclosed(lnum) ~= -1 then
+                out[file] = true
+            end
+        end
+    end)
+    return out
+end
+
+local function close_fold(file)
+    local win = vim.fn.bufwinid(result_buf())
+    for lnum, line in ipairs(result_lines()) do
+        if line == "file: " .. file then
+            api.nvim_win_call(win, function() vim.cmd(lnum .. "foldclose") end)
+        end
+    end
+end
+
+local function fold_section(rule_buf)
+    local lines = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
+    local i = vim.fn.index(lines, "[fold]")
+    return i == -1 and nil or vim.list_slice(lines, i + 2)
+end
+
+test("result buffer folds by file; folds are saved to [fold] and survive a rerender", function()
+    local rule = setup_two_files()
+    set_rule(rule, { "-e 'resource'" })
+    refresh(rule)
+    eq(2, #vim.tbl_filter(function(l) return l:match("^file: ") end, result_lines()), "file headers")
+    eq({}, folded_files(), "all open after first render")
+    close_fold("a.log")
+    eq({ ["a.log"] = true }, folded_files(), "fold covers one file")
+    set_rule(rule, { "-e 'resource'", "-e 'hardware'" })
+    eq(1, refresh(rule), "level 1 reran")
+    eq({ "a.log" }, fold_section(rule), "[fold] section")
+    eq({ ["a.log"] = true }, folded_files(), "fold restored")
+end)
+
+test("editing [fold] by hand applies it without rerunning rg", function()
+    local rule = setup_two_files()
+    set_rule(rule, { "-e 'resource'" })
+    refresh(rule)
+    close_fold("a.log")
+    refresh(rule)
+    eq({ "a.log" }, fold_section(rule), "saved on refresh")
+    local n = api.nvim_buf_line_count(rule)
+    api.nvim_buf_set_lines(rule, n - 1, n, false, { "b.log" })
+    eq(0, refresh(rule), "rg calls")
+    eq({ ["b.log"] = true }, folded_files(), "rule wins")
+end)
+
+test("leaving the result window saves its folds", function()
+    local rule = setup_two_files()
+    set_rule(rule, { "-e 'resource'" })
+    refresh(rule)
+    api.nvim_set_current_win(vim.fn.bufwinid(result_buf()))
+    vim.cmd("1foldclose")
+    api.nvim_set_current_win(vim.fn.bufwinid(rule))
+    eq(1, #fold_section(rule), "one file saved")
+end)
+
 test("only [highlight] changed: level 1 is skipped", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'" })
