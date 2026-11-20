@@ -164,6 +164,30 @@ From a review of the modules after the split.
   branches, half the test runtime). Costs the few platforms built with PUC Lua.
   Done: `scan.lua` errors without LuaJIT, tests run once.
 
+## Highlight
+
+- [ ] Better default colors, the same with every colorscheme. Now `match_color` links
+  `TermCursor` and `highlight_colors` link `IncSearch`, `DiffAdd`, `DiffChange`,
+  `DiffText`, `Substitute`, `MatchParen` (`defconfig.lua`): they change with the theme,
+  and some barely stand out from the log text. Use fixed colors instead of links (both
+  `fg` and `bg`, so the text stays readable on dark and light backgrounds), clearly
+  distinct from each other: 10 for `highlight_colors`, and `match_color` along with
+  them.
+- [ ] In a result buffer, visual select some text, <Enter>: toggle a highlight for it
+  through `[highlight]` in the rule buffer: if there's no line for the text, add
+  `-e '<text>'` under `[highlight]`, else remove that line, then rerun level 2. The
+  text is taken as `[highlight]` takes it (a regex, unless its flags say otherwise,
+  e.g. `-F`), quoted for the rule parser.
+  - "has a line for the text" means a line that is exactly `-e '<text>'` (as the
+    toggle adds it); patterns inside other lines aren't looked at or changed
+  - single line selections only (charwise, within one line); otherwise a short
+    message that only single line selections are supported
+  - the rule buffer is edited like any buffer (left modified, not saved), nothing
+    else changes, it still doesn't ask to save on quit as now
+  - key in the config, `key.result_toggle_highlight = '<cr>'` (visual mode)
+  - the new line goes at the end of the `[highlight]` section; the text is the
+    selection as is (a `<lnum>: ` prefix in it isn't trimmed)
+
 ## References
 
 Read 2026-11-20, shallow clones of github.com/variar/klogg and github.com/tstack/lnav.
