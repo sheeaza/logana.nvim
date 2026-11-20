@@ -81,8 +81,10 @@ end
 -- the first lines show while rg is still running
 local BATCH_BYTES = 1024 * 1024
 -- the scanned lines go to the buffer once per BATCH_BYTES or this many ms:
--- each ':read' costs a temp file write, and the pump batches are only ~100 KB
+-- each ':read' costs a temp file write, and a pump batch is often only what rg wrote since the last
 local FLUSH_MS = 100
+-- how often the pump looks for more rg output in the memfd while rg runs
+local POLL_MS = 3
 
 -- level 1, streamed: the first batch replaces the result buffer, later ones append.
 -- with no match the buffer keeps its old content. job.ropts may be swapped by a
@@ -105,6 +107,9 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         job.finished = true
         st.job = nil
         scan.release()
+        if job.src then
+            scan.close_output(job.src)
+        end
         job.stop_spinner()
         if res.code == 2 then
             vim.notify(("[logana] ripgrep error for: %s"):format(res.stderr or "exit code 2"), vim.log.levels.WARN)
@@ -186,32 +191,44 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
             st.job = nil
             job.stop_spinner()
             pcall(job.proc.kill, job.proc, 15)
+            if job.exit and job.src then
+                scan.close_output(job.src) -- else the exit callback does
+            end
             return
         end
 
         local t = now_ms()
-        local parts, size = { job.rest }, #job.rest
-        while job.head <= job.tail and size < BATCH_BYTES do
-            local c = job.chunks[job.head]
-            job.chunks[job.head] = nil
-            job.head = job.head + 1
-            parts[#parts + 1] = c
-            size = size + #c
-        end
-        local data = table.concat(parts)
-        -- rg ends every line with '\n'; keep a partial last line for the next batch
-        local cut = data:match('^.*()\n')
-        if cut then
-            job.rest = data:sub(cut + 1)
-            data = data:sub(1, cut)
-        else
-            job.rest, data = data, ''
-        end
         local p = job.parser
-        scan.scan_batch(p, data)
+        -- more: there's output left to scan now. drained: rg is done and all of it scanned
+        local more, drained
+        if job.src then
+            local exited = job.exit
+            more = scan.scan_output(job.src, p, BATCH_BYTES) == BATCH_BYTES
+            drained = exited and not more
+        else
+            local parts, size = { job.rest }, #job.rest
+            while job.head <= job.tail and size < BATCH_BYTES do
+                local c = job.chunks[job.head]
+                job.chunks[job.head] = nil
+                job.head = job.head + 1
+                parts[#parts + 1] = c
+                size = size + #c
+            end
+            local data = table.concat(parts)
+            -- rg ends every line with '\n'; keep a partial last line for the next batch
+            local cut = data:match('^.*()\n')
+            if cut then
+                job.rest = data:sub(cut + 1)
+                data = data:sub(1, cut)
+            else
+                job.rest, data = data, ''
+            end
+            scan.scan_batch(p, data)
+            more = job.head <= job.tail
+            drained = job.exit and not more
+        end
         local t1 = now_ms()
-        if p.o > 0 and (p.o >= BATCH_BYTES or not job.started or t1 - job.flushed >= FLUSH_MS
-                or (job.exit and job.head > job.tail)) then
+        if p.o > 0 and (p.o >= BATCH_BYTES or not job.started or t1 - job.flushed >= FLUSH_MS or drained) then
             write()
             job.flushed = t1
         end
@@ -220,46 +237,59 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         job.set_ms = job.set_ms + t2 - t1
         job.max_ms = math.max(job.max_ms, t2 - t)
 
-        if job.head <= job.tail then
+        if more then
             schedule_pump()
-        elseif job.exit then
+        elseif drained then
             done(job.exit)
-        elseif job.parser.o > 0 and not job.flush_timer then
-            -- rg paused, show what's collected without waiting for more
-            job.flush_timer = true
-            vim.defer_fn(function()
-                job.flush_timer = false
-                schedule_pump()
-            end, FLUSH_MS)
+        elseif job.src or p.o > 0 then
+            -- memfd: nothing tells when rg wrote more, look again shortly. pipe: rg
+            -- paused, show what's collected without waiting for more
+            if not job.wait_timer then
+                job.wait_timer = true
+                vim.defer_fn(function()
+                    job.wait_timer = false
+                    schedule_pump()
+                end, job.src and POLL_MS or FLUSH_MS)
+            end
         end
     end
 
     -- not text = true: its '\r\n' gsub over the whole output cost about as much as rg.
     -- a '\r' line ending stays in the line text, as it did with --json.
     -- both callbacks run in a fast event context, they only queue work for pump
+    job.src = process.enabled and scan.open_output() or nil
     local ok, proc = pcall(process.system, ropts.args_common, {
-        stdout = function(_, data)
+        stdout_fd = job.src and job.src.fd,
+        stdout = not job.src and function(_, data)
             if data and st.gen == gen then
                 job.tail = job.tail + 1
                 job.chunks[job.tail] = data
                 schedule_pump()
             end
-        end,
+        end or nil,
     }, function(res)
         vim.schedule(function()
-            if st.gen == gen then
+            if st.gen == gen and st.job == job then
                 job.exit = res
                 schedule_pump()
+            elseif job.src then
+                scan.close_output(job.src) -- stopped or replaced, nothing reads it
             end
         end)
     end)
     if not ok or not proc then
+        if job.src then
+            scan.close_output(job.src)
+        end
         st.job = nil
         job.stop_spinner()
         vim.notify("[logana] failed to execute ripgrep", vim.log.levels.WARN)
         return
     end
     job.proc = proc
+    if job.src then
+        schedule_pump() -- it polls the memfd from now on
+    end
 end
 
 -- level 1 ([rg] -> result lines) only reruns when its inputs changed, or the result

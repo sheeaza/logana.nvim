@@ -17,7 +17,10 @@ for _, decl in ipairs({ 'void *fopen(const char *path, const char *mode);',
     -- linux only. long is off_t for the unsuffixed symbols, also on 32 bit
     'int memfd_create(const char *name, unsigned int flags);', 'int ftruncate(int fd, long len);',
     'long pwrite(int fd, const void *buf, size_t n, long off);',
-    'void *memchr(const void *s, int c, size_t n);', 'int memcmp(const void *a, const void *b, size_t n);' }) do
+    'void *memchr(const void *s, int c, size_t n);', 'int memcmp(const void *a, const void *b, size_t n);',
+    'void *memrchr(const void *s, int c, size_t n);', 'long pread(int fd, void *buf, size_t n, long off);',
+    'int fallocate(int fd, int mode, long off, long len);', 'int close(int fd);',
+    'void *memmove(void *dst, const void *src, size_t n);' }) do
     pcall(ffi.cdef, decl)
 end
 
@@ -32,11 +35,12 @@ local function find(src, i, e, c)
     return r == nil and e or tonumber(ffi.cast(u8p, r) - src)
 end
 
--- parses whole lines of level 1 output (level1.lua), appends the buffer lines to p.out, p.o bytes so far,
+-- parses whole lines of level 1 output (level1.lua), a string or n bytes at a
+-- pointer, appends the buffer lines to p.out, p.o bytes so far,
 -- for read_scanned. headers are found by comparing each line's path with the
 -- previous one, kept in p.path
-local function scan_batch(p, data)
-    local n = #data
+local function scan_batch(p, data, n)
+    n = n or #data
     -- a line grows by at most the 'file: ' header and blank line before it
     if p.cap < p.o + 3 * n + 16 then
         p.cap = 2 * (p.o + 3 * n + 16)
@@ -122,6 +126,54 @@ local function scan_batch(p, data)
     p.n, p.k, p.o = row, k, o
 end
 
+-- rg's output on linux: rg writes it to a memfd, read back here with pread. a pipe
+-- holds 64 KB, and nothing reads it while a batch runs on the main thread, so rg
+-- stalled; it also came as one lua string per chunk, joined and cut per batch.
+-- nil when there's no memfd
+local function open_output()
+    local ok, fd = pcall(function() return C.memfd_create('logana.rg', 1) end) -- MFD_CLOEXEC
+    if not ok or fd < 0 then
+        return nil
+    end
+    return { fd = fd, off = 0, freed = 0, carry = 0, cap = 0 }
+end
+
+-- scans the whole lines of up to max more bytes rg wrote, keeping a partial last
+-- line for the next call. returns how many bytes it read
+local function scan_output(src, p, max)
+    if src.cap < src.carry + max then
+        src.cap = src.carry + max
+        local grown = ffi.new('uint8_t[?]', src.cap)
+        ffi.copy(grown, src.buf, src.carry)
+        src.buf = grown
+    end
+    local buf = src.buf
+    local got = tonumber(C.pread(src.fd, buf + src.carry, max, src.off))
+    if got <= 0 then
+        return 0
+    end
+    src.off = src.off + got
+    local len = src.carry + got
+    local r = C.memrchr(buf, 10, len)
+    local cut = r == nil and 0 or tonumber(ffi.cast(u8p, r) - buf) + 1
+    scan_batch(p, buf, cut)
+    src.carry = len - cut
+    if cut > 0 then
+        C.memmove(buf, buf + cut, src.carry)
+    end
+    -- give back the pages read. FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE
+    local upto = src.off - src.off % 4096
+    if upto > src.freed then
+        C.fallocate(src.fd, 3, src.freed, upto - src.freed)
+        src.freed = upto
+    end
+    return got
+end
+
+local function close_output(src)
+    C.close(src.fd)
+end
+
 -- the file read_scanned puts the lines in for ':read', returns its path and fd:
 -- on linux an anonymous memfd, memory backed and gone with neovim, opened once.
 -- else a file in the run dir, a tmpfs on most linux systems: on a disk,
@@ -195,4 +247,7 @@ end
 M.scan_batch = scan_batch
 M.read_scanned = read_scanned
 M.release = release
+M.open_output = open_output
+M.scan_output = scan_output
+M.close_output = close_output
 return M

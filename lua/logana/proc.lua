@@ -43,12 +43,16 @@ local function new_pipe()
 end
 
 -- the part of vim.system the plugin uses: opts.stdout is a function(err, data)
--- streaming it, else stdout is collected into res.stdout; stderr is always
+-- streaming it, opts.stdout_fd an fd the child writes it to (not in vim.system),
+-- else stdout is collected into res.stdout; stderr is always
 -- collected; opts.stdin is a string. on_exit(res) with res = { code, stdout,
 -- stderr } runs in a fast event context, as vim.system's. errors if args[1]
 -- can't be run. returns an object with :kill(signal)
 local function spawn(args, opts, on_exit)
-    local out_r, out_w = new_pipe()
+    local out_r, out_w
+    if not opts.stdout_fd then
+        out_r, out_w = new_pipe()
+    end
     local err_r, err_w = new_pipe()
     local fa = ffi.new('uint8_t[?]', FILE_ACTIONS_SIZE)
     ffi.C.posix_spawn_file_actions_init(fa)
@@ -61,7 +65,7 @@ local function spawn(args, opts, on_exit)
     else
         ffi.C.posix_spawn_file_actions_addopen(fa, 0, '/dev/null', 0, 0) -- O_RDONLY
     end
-    ffi.C.posix_spawn_file_actions_adddup2(fa, out_w, 1)
+    ffi.C.posix_spawn_file_actions_adddup2(fa, opts.stdout_fd or out_w, 1)
     ffi.C.posix_spawn_file_actions_adddup2(fa, err_w, 2)
 
     local argv = ffi.new('char *[?]', #args + 1)
@@ -77,13 +81,17 @@ local function spawn(args, opts, on_exit)
     if in_r then
         ffi.C.close(in_r)
     end
-    ffi.C.close(out_w)
+    if out_w then
+        ffi.C.close(out_w)
+    end
     ffi.C.close(err_w)
     if rc ~= 0 then
         if in_w then
             ffi.C.close(in_w)
         end
-        ffi.C.close(out_r)
+        if out_r then
+            ffi.C.close(out_r)
+        end
         ffi.C.close(err_r)
         error(('[logana] cannot run %s (errno %d)'):format(args[1], rc))
     end
@@ -96,7 +104,7 @@ local function spawn(args, opts, on_exit)
         stdin:shutdown(function() stdin:close() end)
     end
 
-    local out, err, open = {}, {}, 2
+    local out, err, open = {}, {}, opts.stdout_fd and 1 or 2
     local exited = false
     local function reap()
         -- the pipes are closed, the child is done or about to be
@@ -133,7 +141,9 @@ local function spawn(args, opts, on_exit)
             end
         end)
     end
-    reader(out_r, opts.stdout or function(_, data) out[#out + 1] = data end)
+    if out_r then
+        reader(out_r, opts.stdout or function(_, data) out[#out + 1] = data end)
+    end
     reader(err_r, function(_, data) err[#err + 1] = data end)
 
     return {

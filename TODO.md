@@ -81,10 +81,16 @@ growing log appended is out of scope.
   rows, i5-12500H): `scan_batch` alone over the 94 MB rg output 264 -> 176 ms; in
   the bench `parse` 419 -> 282 ms, but `level1` only 974 -> 915 ms, rg's pipe is
   the limit now (next item).
-- [ ] rg writes to a pipe of 64 KB that nothing reads while a batch runs on the main
+- [x] rg writes to a pipe of 64 KB that nothing reads while a batch runs on the main
   thread, so rg stalls; each chunk is also a Lua string, joined and cut per batch.
   Point rg's stdout at a memfd (`posix_spawn_file_actions_adddup2`), `mmap` it and
   scan the bytes up to its current size, so rg runs ahead and no output string is made.
+  Done, with `pread` into a reused C buffer instead of `mmap`, the pages read given
+  back with `fallocate` (punch hole), the pump polling every 3 ms while rg runs; the
+  pipe stays when there's no `posix_spawn`. Same log as above: `level1` 931 -> 732 ms
+  (`parse` 292 -> 220, `set_lines` 240 -> 167), RSS 192 -> 164 MB. rg alone takes
+  ~640 ms of it (single threaded on one file): its `--replace` markers ~180 ms, `-n`
+  ~140 ms. A 1 MB pipe (`F_SETPIPE_SZ`) instead got 931 -> 845 ms.
 - [ ] Keep the level 1 ranges (`first`, `count`, `cols`, ~2.2M numbers on `large`) in
   ffi `uint32_t` arrays grown by doubling, instead of Lua tables, which rehash inside
   a batch at each power of two.
