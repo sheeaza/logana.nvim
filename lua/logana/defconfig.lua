@@ -36,7 +36,7 @@ local M = {
         rule_pos = 'top',
 
         -- percentage of rule and result window, result window wil be set to '1 - rule_window'
-        rule_window = '50',
+        rule_window = '20',
     },
 
     result_win = {

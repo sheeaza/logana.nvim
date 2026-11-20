@@ -102,8 +102,21 @@ end
 local function result_open_win(result_buf, rule_win)
     local split = SPLIT_DIR[M.config.layout.rule_pos] or 'left'
     local t0 = vim.uv.now()
-    api.nvim_open_win(result_buf, false, { split = split, win = rule_win })
+    local result_win = api.nvim_open_win(result_buf, false, { split = split, win = rule_win })
     log.trace(string.format("render_results openwin took: %d ms", vim.uv.now() - t0))
+
+    -- rule and result split the space rule_win had; the +1 is the statusline
+    -- or vertical separator between them
+    local pct = tonumber(M.config.layout.rule_window)
+    if pct and pct > 0 and pct < 100 then
+        if split == 'below' or split == 'above' then
+            local total = api.nvim_win_get_height(rule_win) + api.nvim_win_get_height(result_win) + 1
+            api.nvim_win_set_height(rule_win, math.max(1, math.floor(total * pct / 100)))
+        else
+            local total = api.nvim_win_get_width(rule_win) + api.nvim_win_get_width(result_win) + 1
+            api.nvim_win_set_width(rule_win, math.max(1, math.floor(total * pct / 100)))
+        end
+    end
 end
 
 local function split_with_quotes(str)

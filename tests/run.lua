@@ -123,6 +123,14 @@ test("a [highlight] rule's own flags override the shared ones", function()
     eq({ "match:1:resource", "match:2:resource", "hl:2:Timeout:2" }, highlighted())
 end)
 
+test("rule window gets layout.rule_window percent of the rule/result split", function()
+    local rule = setup_session()
+    local rule_win = vim.fn.bufwinid(rule)
+    local result_win = vim.fn.bufwinid(result_buf())
+    local total = api.nvim_win_get_height(rule_win) + api.nvim_win_get_height(result_win) + 1
+    eq(math.floor(total * tonumber(L.config.layout.rule_window) / 100), api.nvim_win_get_height(rule_win))
+end)
+
 test("only [highlight] changed: level 1 is skipped", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'" })
