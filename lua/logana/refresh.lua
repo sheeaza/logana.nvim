@@ -10,6 +10,7 @@ local rule = require('logana.rule')
 local result = require('logana.result')
 local fold = require('logana.fold')
 local spinner = require('logana.spinner')
+local process = require('logana.proc')
 
 local M = {}
 
@@ -253,7 +254,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
     -- not text = true: its '\r\n' gsub over the whole output cost about as much as rg.
     -- a '\r' line ending stays in the line text, as it did with --json.
     -- both callbacks run in a fast event context, they only queue work for pump
-    local ok, proc = pcall(vim.system, ropts.args_common, {
+    local ok, proc = pcall(process.system, ropts.args_common, {
         stdout = function(_, data)
             if data and st.gen == gen then
                 job.tail = job.tail + 1

@@ -3,6 +3,7 @@ local api = vim.api
 local config = require('logana.config')
 local log = require('logana.log')
 local now_ms = require('logana.util').now_ms
+local process = require('logana.proc')
 
 local M = {}
 
@@ -166,7 +167,7 @@ highlight_rows = function(bufnr, hls, rows, on_done)
         vim.list_extend(args, rule_args)
         table.insert(args, '-')
         -- exit callbacks only run once this loop is done, left can't reach 0 in it
-        local ok = pcall(vim.system, args, { text = true, stdin = input }, function(res)
+        local ok = pcall(process.system, args, { text = true, stdin = input }, function(res)
             results[i] = res
             left = left - 1
             if left == 0 then

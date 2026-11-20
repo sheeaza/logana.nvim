@@ -82,14 +82,25 @@ From a review of the modules after the split.
   no difference (`large` parse 354-386 ms before, 352-388 after), not kept.
 - [x] Drop the `pcall`s around `vim.uv.fs_stat` (returns nil, doesn't throw) and
   around 'filetype' lookups on valid buffers.
-- [ ] The first level 1 write clearing the previous result (738k lines) blocks ~245
+- [x] The first level 1 write clearing the previous result (738k lines) blocks ~245
   ms, the largest `max_batch`, with either parser. Find out where it goes.
-  Found: clearing the 738k lines alone takes ~55 ms, but ~250 ms while rg runs. Even
-  an rg writing to /dev/null, that neovim never reads, makes it 4-5x slower, so it's
-  contention between the processes (8-thread laptop; the 20-thread desktop showed
-  ~75 ms), not the folds, `nvim_buf_call`, the attach or how the buffer was built.
-  The fix would be clearing before rg starts, but then a search with no match no
-  longer keeps the old result. Open: worth that trade?
+  Found: clearing the 738k lines alone takes ~55 ms, but ~220-250 ms after neovim
+  started any process (level 1 rg, the lazy level 2 rgs, even `true`): libuv forks,
+  which makes neovim's pages copy-on-write, and freeing the lines then takes a page
+  fault on each of ~31k pages. Not specific to the clear: the first write to any
+  old page after a spawn pays it.
+  Tried: clearing at <Enter>, before rg starts: no gain, level 2 spawns rg on most
+  redraws, so a fork had just happened (the ~250 ms moved to `first`). Also
+  considered: loading into a new buffer and wiping the old one, but the result
+  would get a new buffer number every refresh (marks, `#`), and freeing its lines
+  most likely hits the same faults. Kept as is.
+- [x] Start processes without fork: `posix_spawn` (glibc uses `CLONE_VM|CLONE_VFORK`,
+  no page tables copied, so no copy-on-write faults) through the LuaJIT ffi, or a
+  small helper process started early that spawns rg for us. Would also make each
+  spawn itself cheaper with a large neovim.
+  Done with `posix_spawn` (`proc.lua`, linux + LuaJIT, `vim.system` elsewhere):
+  `large` total 1063 -> 803 ms, max_batch 251 -> 57 ms, one screen of level 2
+  25 -> 6 ms.
 - [ ] Maybe: require LuaJIT and drop the lua parser (~100 lines, the `write`/pump
   branches, half the test runtime). Costs the few platforms built with PUC Lua.
 

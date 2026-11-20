@@ -11,9 +11,10 @@ local api = vim.api
 local L = require("logana")
 L.setup({})
 
-local orig_system = vim.system
+local process = require("logana.proc")
+local orig_system = process.system
 local rg_calls, level1_calls = 0, 0
-vim.system = function(args, ...)
+process.system = function(args, ...)
     rg_calls = rg_calls + 1
     if vim.tbl_contains(args, "--null") then
         level1_calls = level1_calls + 1
@@ -563,8 +564,10 @@ end)
 -- every test runs with the ffi scanner (LuaJIT) and with the lua parser
 local failed, total = 0, 0
 local scan = require("logana.scan")
+local orig_enabled = process.enabled
 for _, ffi_mode in ipairs(scan.enabled and { true, false } or { false }) do
     scan.enabled = ffi_mode
+    process.enabled = ffi_mode and orig_enabled
     for _, t in ipairs(tests) do
         total = total + 1
         local ok, err = pcall(t.f)

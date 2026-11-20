@@ -40,7 +40,7 @@ runner adds the repo to `runtimepath` itself.
 `tests/run.lua` does the following:
 
 - Loads the plugin from the repo and calls `require("logana").setup({})`.
-- Wraps `vim.system` to count how many `rg` processes each refresh starts. The
+- Wraps `require("logana.proc").system` to count how many `rg` processes each refresh starts. The
   tests check this count to confirm which levels re-ran:
   - level 1 (`[rg]`) runs one `rg`;
   - level 2 (`[highlight]`) runs one `rg` per `[highlight]` line that has a pattern,
@@ -54,8 +54,9 @@ runner adds the repo to `runtimepath` itself.
   created relative to cwd, so each test starts with nothing left over from the previous one.
 - Turns on `filetype` detection, which `-u NONE` leaves off; rule buffers are set up
   by their `FileType` autocmd.
-- Runs every test twice: with the LuaJIT ffi scanner for level 1 (`[ffi]`) and
-  with the Lua parser used without LuaJIT (`[lua]`).
+- Runs every test twice: with the LuaJIT ffi scanner for level 1 and rg started
+  with `posix_spawn` (`[ffi]`), and with the Lua parser and `vim.system`, used
+  without LuaJIT (`[lua]`).
 - Reads the computed highlights from `require("logana")._result_highlights` and
   turns them into readable strings:
 
@@ -238,4 +239,17 @@ ffi scanner:
 small        8984       7       9           7           3      107    10     108       19
 medium     131719       9      77          78          42      240    13     241       55
 large      738898      12     526         523         252     1298    25    1298      224
+```
+
+rg started with `posix_spawn` instead of `vim.system`. libuv forks, which leaves
+all of Neovim's pages copy-on-write; with a large result loaded, the first write
+to each old page afterwards takes a page fault, e.g. clearing the previous 738k
+result lines took ~250 ms instead of ~55 (31k faults). Same machine and log
+(median of 3, ffi scanner):
+
+```
+case    res_lines   first   parse   set_lines   max_batch   level1    hl   total   rss_MB
+small        8984       5      10           4           3      108     6     108       21
+medium     131719       5      72          43           9      204     6     205       51
+large      738898       5     342         248          57      802     6     803      206
 ```
