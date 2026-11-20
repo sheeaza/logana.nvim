@@ -314,6 +314,23 @@ test("level 2 columns are right with multibyte text and ':' in lines", function(
     }, highlighted())
 end)
 
+test("level 1 columns are right with several matches per line and multibyte text", function()
+    local rule = setup_session()
+    vim.fn.writefile({ "日本 busy x busy", "busy" }, "a.log")
+    set_rule(rule, { "-e 'busy'", "-e '日本'" })
+    refresh(rule)
+    eq({ "match:1:日本", "match:1:busy", "match:1:busy", "match:2:busy" }, highlighted())
+end)
+
+test("level 1 skips -A/-B context lines and keeps lines that aren't utf-8", function()
+    local rule = setup_session()
+    vim.fn.writefile({ "before", "\255 busy", "after" }, "a.log")
+    set_rule(rule, { "-A 1", "-B 1", "-e 'busy'" })
+    refresh(rule)
+    eq({ "file: a.log", "2: \255 busy", "" }, result_lines())
+    eq({ "match:1:busy" }, highlighted())
+end)
+
 test("invalid [highlight] pattern warns and keeps level 1", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'" }, { "-e '(bad'", "-e 'busy'" })

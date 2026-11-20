@@ -1,7 +1,7 @@
 local M = {
     rg = {
         cmd = 'rg', -- you can set your 'rg' path here
-        args = { "--json", "--no-config", "--color", "never" },
+        args = { "--no-config" }, -- extra args; the output format flags are set by logana
     },
 
     -- level 1: every [rg] match shares this one color

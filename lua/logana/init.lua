@@ -4,6 +4,12 @@ local log = require('logana.log')
 
 local M = {}
 
+-- for trace timings. not vim.uv.now(), that's the loop's cached time, which
+-- doesn't advance during synchronous lua work
+local function now_ms()
+    return vim.uv.hrtime() / 1e6
+end
+
 local NS_MATCH = api.nvim_create_namespace("logana.match")
 
 local SPLIT_DIR = { top = 'below', bottom = 'above', left = 'right', right = 'left' }
@@ -91,9 +97,9 @@ local function result_open_win(result_buf, rule_win)
     end
 
     local split = SPLIT_DIR[M.config.layout.rule_pos] or 'left'
-    local t0 = vim.uv.now()
+    local t0 = now_ms()
     local result_win = api.nvim_open_win(result_buf, false, { split = split, win = rule_win })
-    log.trace(string.format("result_open_win took: %d ms", vim.uv.now() - t0))
+    log.trace(string.format("result_open_win took: %d ms", now_ms() - t0))
 
     -- rule and result split the space rule_win had; the +1 is the statusline
     -- or vertical separator between them
@@ -227,6 +233,45 @@ local function parse_rule_buf(rule_buf)
     return rule
 end
 
+-- level 1 output: '<path>\0<lnum>:<line>', each match in the line wrapped in
+-- MARK_S..MARK_E via --replace, which gives the line and every match range in one
+-- pass. not --json, decoding it in lua took more than half of a large refresh.
+-- context lines (-A/-B/-C) print '<lnum>-' and are skipped, like --json's
+-- "context" events were. a marker byte already in a log line would shift the
+-- columns after it on that line; they're ascii control chars logs don't use.
+local MARK_S, MARK_E = '\30', '\31'
+local LEVEL1_ARGS = { '--color', 'never', '--no-heading', '--with-filename', '--line-number',
+    '--no-column', '--null', '--replace', MARK_S .. '${0}' .. MARK_E }
+
+-- strips the markers from a level 1 line; returns the text and its match ranges
+local function unmark(raw)
+    local a = raw:find(MARK_S, 1, true)
+    if not a then
+        return raw, {}
+    end
+    local b = raw:find(MARK_E, a + 1, true)
+    -- most lines have one match, plain sub/concat is ~1/3 faster for those
+    if b and not raw:find(MARK_S, b + 1, true) then
+        return raw:sub(1, a - 1) .. raw:sub(a + 1, b - 1) .. raw:sub(b + 1), { { a - 1, b - 2 } }
+    end
+    local parts, matches, len, s = {}, {}, 0, 1
+    while a do
+        b = raw:find(MARK_E, a + 1, true)
+        if not b then
+            break
+        end
+        local start = len + a - s
+        parts[#parts + 1] = raw:sub(s, a - 1)
+        parts[#parts + 1] = raw:sub(a + 1, b - 1)
+        len = start + b - a - 1
+        matches[#matches + 1] = { start, len }
+        s = b + 1
+        a = raw:find(MARK_S, s, true)
+    end
+    parts[#parts + 1] = raw:sub(s)
+    return table.concat(parts), matches
+end
+
 --[[
 return result format:
 {
@@ -251,9 +296,9 @@ local function collect_matches(ropts)
         return nil, "failed"
     end
 
-    local t0 = vim.uv.now()
+    local t0 = now_ms()
     local res = proc:wait()
-    log.trace(string.format("rg took: %d ms", vim.uv.now() - t0))
+    log.trace(string.format("rg took: %d ms", now_ms() - t0))
 
     if res.code == 1 then
         vim.notify(("[logana] cmd[%s], no match found"):format(table.concat(ropts.args_common, ' ')), vim.log.levels.INFO)
@@ -264,41 +309,24 @@ local function collect_matches(ropts)
         return nil, {}
     end
 
-    local t1 = vim.uv.now()
+    local t1 = now_ms()
     local results = {}
     local cur_fentry = nil
 
-    for jline in res.stdout:gmatch("([^\n]+)") do
-        local okj, ev = pcall(vim.json.decode, jline)
-        if okj and ev and ev.type == "match" and ev.data then
-            local d = ev.data
-            local path = d.path and d.path.text
-            local lnum = d.line_number
-            local text = d.lines and d.lines.text
-
-            if path and lnum and type(text) == "string" then
-                if not cur_fentry or cur_fentry.file_name ~= path then
-                    cur_fentry = { file_name = path, lines = {} }
-                    table.insert(results, cur_fentry)
-                end
-
-                local entry = {
-                    line_number = lnum,
-                    line_text = text:gsub("\n$", ""),
-                    matches = {},
-                }
-                if d.submatches and #d.submatches > 0 then
-                    for _, sm in ipairs(d.submatches) do
-                        if sm and sm.start and sm["end"] then
-                            table.insert(entry.matches, { sm.start, sm["end"] })
-                        end
-                    end
-                end
-                table.insert(cur_fentry.lines, entry)
-            end
+    for path, lnum, raw in res.stdout:gmatch("([^%z\n]*)%z(%d+):([^\n]*)") do
+        if not cur_fentry or cur_fentry.file_name ~= path then
+            cur_fentry = { file_name = path, lines = {} }
+            table.insert(results, cur_fentry)
         end
+        local text, matches = unmark(raw)
+        local lines = cur_fentry.lines
+        lines[#lines + 1] = {
+            line_number = tonumber(lnum),
+            line_text = text,
+            matches = matches,
+        }
     end
-    log.trace(string.format("parse rg json took: %d ms", vim.uv.now() - t1))
+    log.trace(string.format("parse rg output took: %d ms", now_ms() - t1))
 
     return results
 end
@@ -368,7 +396,7 @@ local function render_results(result_buf, matches)
     -- fn.bufadd/fn.bufload bypass create_normal_buffer's swapfile=false
     pcall(api.nvim_set_option_value, "swapfile", false, { buf = result_buf })
 
-    local t0 = vim.uv.now()
+    local t0 = now_ms()
     for _, file in ipairs(matches) do
         table.insert(lines, "file: " .. file.file_name)
         cur_line_num = cur_line_num + 1
@@ -395,17 +423,17 @@ local function render_results(result_buf, matches)
         table.insert(lines, '')
         cur_line_num = cur_line_num + 1
     end
-    log.trace(string.format("render_results prepare lines took: %d ms", vim.uv.now() - t0))
+    log.trace(string.format("render_results prepare lines took: %d ms", now_ms() - t0))
 
-    local t1 = vim.uv.now()
+    local t1 = now_ms()
     api.nvim_buf_set_lines(result_buf, 0, -1, false, lines)
-    log.trace(string.format("render_results set lines took: %d ms", vim.uv.now() - t1))
+    log.trace(string.format("render_results set lines took: %d ms", now_ms() - t1))
 
-    local t2 = vim.uv.now()
+    local t2 = now_ms()
     ensure_decoration_provider()
     -- level 2 highlights are recomputed against the new lines by the caller
     RESULT_HIGHLIGHTS[result_buf] = { match = highlights_by_row, hl = {} }
-    log.trace(string.format("render_results hi took: %d ms", vim.uv.now() - t2))
+    log.trace(string.format("render_results hi took: %d ms", now_ms() - t2))
 
     local hl_input = #hl_texts > 0 and table.concat(hl_texts, '\n') .. '\n' or ''
     return hl_input, hl_rows, file_rows
@@ -432,7 +460,14 @@ local function get_valid_opened_files()
 end
 
 local function get_runtime_opts(rule_buf)
-    local args = vim.list_extend({ M.config.rg.cmd }, M.config.rg.args)
+    local args = { M.config.rg.cmd }
+    for _, a in ipairs(M.config.rg.args) do
+        -- output format is fixed by LEVEL1_ARGS; drop the old default from user configs
+        if a ~= '--json' then
+            table.insert(args, a)
+        end
+    end
+    vim.list_extend(args, LEVEL1_ARGS)
 
     -- exclude rule/result files
     table.insert(args, '-g')
@@ -628,6 +663,7 @@ end
 -- with opened_only = false, changes to the files under cwd can't be detected, so
 -- a refresh where nothing else changed reruns level 1 too.
 local function refresh_from_rule(rule_buf)
+    local t_all = now_ms()
     local ropts, err = get_runtime_opts(rule_buf)
     if err then
         return nil, "get runtime opts failed"
@@ -641,7 +677,9 @@ local function refresh_from_rule(rule_buf)
     local fold_edited = table.concat(read_fold_section(rule_buf), '\n') ~= st.fold_sig
     local fold_win = st.result_buf and api.nvim_buf_is_valid(st.result_buf) and fn.bufwinid(st.result_buf) or -1
     if not fold_edited and fold_win ~= -1 then
+        local t = now_ms()
         save_folds(rule_buf, st, fold_win)
+        log.trace(string.format("save_folds took: %d ms", now_ms() - t))
     end
     local rerendered = false
 
@@ -651,17 +689,17 @@ local function refresh_from_rule(rule_buf)
     local unchanged = st.hl_sig == ropts.hl_sig and not fold_edited
     if not result_intact or st.match_sig ~= ropts.match_sig
         or (unchanged and not ropts.opened_only) then
-        local t0 = vim.uv.now()
+        local t0 = now_ms()
         local matches, merr = collect_matches(ropts)
         if merr then
             return nil, "collect_matches failed"
         end
-        log.trace(string.format("collect_matches took: %d ms", vim.uv.now() - t0))
+        log.trace(string.format("collect_matches took: %d ms", now_ms() - t0))
 
         local result_buf = get_result_buf(rule_buf)
-        local t1 = vim.uv.now()
+        local t1 = now_ms()
         st.hl_input, st.hl_rows, st.file_rows = render_results(result_buf, matches)
-        log.trace(string.format("render_results took: %d ms", vim.uv.now() - t1))
+        log.trace(string.format("render_results took: %d ms", now_ms() - t1))
 
         -- track user edits of the result buffer (changedtick can't be used, ':w'
         -- bumps it too). on_lines also fires for our own set_lines in
@@ -699,17 +737,20 @@ local function refresh_from_rule(rule_buf)
     end
 
     if st.hl_sig ~= ropts.hl_sig then
-        local t2 = vim.uv.now()
+        local t2 = now_ms()
         RESULT_HIGHLIGHTS[st.result_buf].hl = collect_highlights(ropts.hl_rules, st.hl_input, st.hl_rows)
-        log.trace(string.format("collect_highlights took: %d ms", vim.uv.now() - t2))
+        log.trace(string.format("collect_highlights took: %d ms", now_ms() - t2))
         st.hl_sig = ropts.hl_sig
         -- decoration provider marks are ephemeral; force visible windows to redraw them
         pcall(api.nvim__redraw, { buf = st.result_buf, valid = false })
     end
 
     if rerendered or fold_edited then
+        local t3 = now_ms()
         restore_folds(rule_buf, st)
+        log.trace(string.format("restore_folds took: %d ms", now_ms() - t3))
     end
+    log.trace(string.format("refresh took: %d ms", now_ms() - t_all))
 end
 
 local function find_rg_section_end(buf)

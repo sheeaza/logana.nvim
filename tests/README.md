@@ -97,3 +97,45 @@ call `refresh(rule)`; with `opened_only = true` the change is detected, as the m
 `.github/workflows/test.yml` runs the same command on GitHub Actions for every
 push and pull request. It runs against the latest Neovim release (v0.12.6) and
 nightly, with ripgrep from Ubuntu's packages.
+
+## Benchmark
+
+`tests/bench.lua` times one refresh against a real log, split by phase:
+
+```sh
+nvim --headless -u NONE -l tests/bench.lua <log file or dir> [runs] [--xl]
+```
+
+Each case does one warmup refresh, which fills the page cache and opens the result
+window, then prints the median of `runs` refreshes (default 3) in ms. The phase
+times come from the plugin's `log.trace` timers. Redraw isn't measured, since no UI
+is attached. The cases search the camera log the numbers below were taken on:
+`small` is `ResourceReserve` (~900 matches), `medium` is `DRV_COMMON` (~130k),
+`large` is `CLIENT_MGR` (~740k), and `--xl` adds `Info  ` (~2.5M). All cases use the
+same three `[highlight]` rules. For another log, edit `CASES` in the script.
+
+Columns: `rg` level 1 rg run, `parse` its output, `prep` building the result
+lines, `set_lines` writing them, `hl` level 2, `save_fold`/`rest_fold` folds,
+`total` the whole refresh, `rss_MB` resident memory after the case.
+
+### Results
+
+500 MB single-file camera log (2.64M lines), i7-12700, ripgrep 13.0.0, Neovim 0.12.0.
+
+Baseline, level 1 parsed from `rg --json` (median of 3):
+
+```
+case    res_lines   rg   parse   prep  set_lines   hl   total   rss_MB
+small         887   79       5      0          0    7      94       16
+medium     132858  374    1006    107         49   59    1637      627
+large      740954 1604    5246   1886        236  259    9393     3441
+```
+
+Level 1 parsed from plain output with `--replace` match markers (median of 5):
+
+```
+case    res_lines   rg   parse   prep  set_lines   hl   total   rss_MB
+small         887   82       1      0          0    7      95       16
+medium     132858  226     366    160         42   42     871      526
+large      740954  991    2523    686        196  187    4707     2503
+```
