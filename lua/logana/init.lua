@@ -63,6 +63,14 @@ local function setup_keybinding()
         desc = "logana: disable swapfile for rule/result files",
     })
 
+    api.nvim_create_autocmd("BufWipeout", {
+        group = M._quit_auto,
+        callback = function(ev)
+            refresh.forget(ev.buf)
+        end,
+        desc = "logana: free the state of a wiped rule/result buffer",
+    })
+
     api.nvim_create_autocmd("QuitPre", {
         group = M._quit_auto,
         callback = function()

@@ -530,6 +530,36 @@ test("an invalid [highlight] pattern warns once, not on every scroll", function(
     eq(1, warned, "warnings")
 end)
 
+test("wiping a result buffer frees its highlights", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" })
+    refresh(rule)
+    local rb = result_buf()
+    eq(true, L._result_highlights[rb] ~= nil, "kept while it exists")
+    vim.cmd("bwipeout! " .. rb)
+    eq(nil, L._result_highlights[rb], "freed")
+    eq(1, refresh(rule), "a refresh after it reruns level 1")
+    eq("file: a.log", result_lines()[1])
+end)
+
+test("wiping the rule buffer while loading stops the run", function()
+    local rule = setup_session()
+    write_big_log(60000)
+    set_rule(rule, { "-e 'resource'" })
+    L.refresh(rule)
+    eq(true, L._busy(rule), "busy")
+    local errors = {}
+    local orig_notify = vim.notify
+    vim.notify = function(msg, level) if level == vim.log.levels.ERROR then table.insert(errors, msg) end end
+    vim.cmd("bwipeout! " .. rule)
+    eq(false, L._busy(rule), "stopped")
+    local n = api.nvim_buf_line_count(result_buf())
+    vim.wait(300, function() return false end, 10)
+    vim.notify = orig_notify
+    eq(n, api.nvim_buf_line_count(result_buf()), "nothing appended after")
+    eq({}, errors, "errors")
+end)
+
 -- every test runs with the ffi scanner (LuaJIT) and with the lua parser
 local failed, total = 0, 0
 local scan = require("logana.scan")

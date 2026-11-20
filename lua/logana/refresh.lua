@@ -330,7 +330,21 @@ local function refresh_from_rule(rule_buf, on_done)
     finish_refresh(rule_buf, st, ropts, false, fold_edited, t_all, on_done)
 end
 
+-- buf was wiped: drop what's kept for it as a rule or a result buffer, and stop
+-- its level 1 run, which would apply [fold] from the wiped rule buffer at the end
+local function forget(buf)
+    local st = RULE_STATE[buf]
+    if st and st.job then
+        st.gen = st.gen + 1 -- the run's callbacks see they're stale
+        st.job.stop_spinner()
+        pcall(st.job.proc.kill, st.job.proc, 15)
+    end
+    RULE_STATE[buf] = nil
+    highlight.by_buf[buf] = nil
+end
+
 M.state = RULE_STATE
+M.forget = forget
 M.refresh_from_rule = refresh_from_rule
 M.rule_state_of_result = rule_state_of_result
 return M

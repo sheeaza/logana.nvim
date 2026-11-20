@@ -73,8 +73,10 @@ From a review of the modules after the split.
   ~10 lines per refresh and one per lazy level 2 request, growing forever. Only
   `tests/bench.lua` reads the traces, and it replaces `log.trace`: make it a no-op.
   Done, `log.lua` is 5 lines now.
-- [ ] Free a result's state on `BufWipeout`: `highlight.by_buf[buf]` (the match
+- [x] Free a result's state on `BufWipeout`: `highlight.by_buf[buf]` (the match
   arrays, tens of MB on `large`) and `refresh.state[rule_buf]` are never cleared.
+  Done; wiping the rule buffer also stops its level 1 run, which used to apply
+  [fold] from the wiped buffer at the end.
 - [ ] Skip one copy per level 1 batch: the pump makes `data:sub(1, cut)` to drop the
   partial last line; the ffi scanner could take `cut` as its length. Measure first.
 - [ ] Drop the `pcall`s around `vim.uv.fs_stat` (returns nil, doesn't throw) and
