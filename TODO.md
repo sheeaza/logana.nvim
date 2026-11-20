@@ -71,6 +71,26 @@ Numbers are for the `large` case of `tests/bench.lua` (740k result lines), see
   get colors while level 1 still loads, and level 1 no longer collects the level 2
   input: `large` total 5097 -> 1298 ms, RSS 1471 -> 224 MB, one screen ~25 ms.
 
+Next, after `posix_spawn` (`large` total ~803 ms: parse ~342, `:read` ~248, the rest
+waiting on rg and the pump). For static log files; re-searching only the bytes a
+growing log appended is out of scope.
+- [ ] `scan_batch` copies and tests byte by byte (~2.5 ns/byte). Find `\n` and the
+  match markers with `memchr`, copy the runs between them with `ffi.copy`, compare
+  the path with `memcmp`.
+- [ ] rg writes to a pipe of 64 KB that nothing reads while a batch runs on the main
+  thread, so rg stalls; each chunk is also a Lua string, joined and cut per batch.
+  Point rg's stdout at a memfd (`posix_spawn_file_actions_adddup2`), `mmap` it and
+  scan the bytes up to its current size, so rg runs ahead and no output string is made.
+- [ ] Keep the level 1 ranges (`first`, `count`, `cols`, ~2.2M numbers on `large`) in
+  ffi `uint32_t` arrays grown by doubling, instead of Lua tables, which rehash inside
+  a batch at each power of two.
+- [ ] The bench only searches one file. Add a case over many files (10k+): `apply_folds`
+  runs two ex commands per file and `capture_folds` a `foldclosed` per file.
+- [ ] Scrolling: level 2 starts one rg per rule on every redraw with new rows, holding
+  `<C-d>` can start dozens. Debounce the requests from `on_end`.
+- [ ] `:read` (~248 ms, ~55 of it clearing the old result) is neovim's memline. Find
+  out where it goes (`perf`), whether any of it can be avoided from Lua.
+
 ## Cleanup
 
 From a review of the modules after the split.
