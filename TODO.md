@@ -112,8 +112,17 @@ growing log appended is out of scope.
   rules, neovim's CPU (no rules: 95 / 168 ms): 2 ms apart 493 -> 256 ms, 600 -> ~370
   rg runs; 33 ms apart (key repeat) unchanged at ~595 ms, each request is done
   before the next redraw. So level 2 costs ~2 ms of CPU per screen of new rows.
-- [ ] `:read` (~248 ms, ~55 of it clearing the old result) is neovim's memline. Find
+- [x] `:read` (~248 ms, ~55 of it clearing the old result) is neovim's memline. Find
   out where it goes (`perf`), whether any of it can be avoided from Lua.
+  Found (`perf`, offline: the 1.1M `large` lines read in 73 pieces of 1 MB): the
+  reads take ~60 ms, `readfile` and `ml_append` mostly, nothing to win there. Clearing
+  the old lines takes as long, ~60 ms, all in the first batch: `nvim_buf_set_lines`
+  deletes line by line (`ml_delete`, its `memmove`s) and counts the bytes of every
+  line for buffer update events (`get_region_bytecount`, ~1/4 of it). `:%delete _`
+  skips the counting: 61 -> 47 ms; deleting from the end in chunks was ~10x slower.
+  Done with `:%delete _`: bench `max_batch` 64 -> 50 ms, `set_lines` 160 -> 148 ms.
+  The rest of `set_lines` vs offline (~150 vs ~120 ms) is the memfd writes and
+  keeping the window views.
 
 ## Cleanup
 

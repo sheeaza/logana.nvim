@@ -242,7 +242,9 @@ local function read_scanned(buf, p, replace)
         .. fn.fnameescape(tmp)
     api.nvim_buf_call(buf, function()
         if replace then
-            api.nvim_buf_set_lines(buf, 0, -1, false, {})
+            -- not nvim_buf_set_lines: it also counts the bytes of every line it deletes
+            -- (for on_bytes), 61 vs 47 ms clearing 1.1M lines
+            vim.cmd('silent noautocmd keepjumps %delete _')
             vim.cmd(cmd:format('0'))
             -- the empty line an empty buffer still has
             api.nvim_buf_set_lines(buf, -2, -1, false, {})
