@@ -1,6 +1,7 @@
 -- Headless benchmark of one refresh (<Enter> in a rule buffer), split by phase:
 --   nvim --headless -u NONE -l tests/bench.lua <log file or dir> [runs] [--xl]
--- Phase times come from the plugin's log.trace timers. Each case does one warmup
+-- Phase times come from the plugin's log.trace timers; each refresh is waited on
+-- until its streamed results are fully loaded. Each case does one warmup
 -- refresh (fills the page cache, opens the result window), then reports the median
 -- of [runs] refreshes (default 3). Redraw isn't measured, there is no UI attached.
 
@@ -54,15 +55,24 @@ if xl then
 end
 
 -- order of the columns, in the order they run
+-- level 1 is streamed: first = until the first lines are in the buffer,
+-- parse/set_lines = summed over its batches, max_batch = longest the UI was blocked
 local PHASES = {
-    { "rg", "rg" },
+    { "first lines", "first" },
     { "parse rg output", "parse" },
-    { "render_results set lines", "set_lines" },
+    { "set lines", "set_lines" },
+    { "max batch", "max_batch" },
+    { "level 1", "level1" },
     { "collect_highlights", "hl" },
     { "save_folds", "save_fold" },
     { "restore_folds", "rest_fold" },
     { "refresh", "total" },
 }
+
+local function refresh(rule)
+    L.refresh(rule)
+    vim.wait(600000, function() return not L._busy(rule) end, 1)
+end
 
 local function median(t)
     if not t or #t == 0 then
@@ -101,11 +111,11 @@ for _, case in ipairs(CASES) do
     set_rule(rule, case.rg)
 
     samples = nil
-    L.refresh(rule) -- warmup
+    refresh(rule) -- warmup
     samples = {}
     -- with opened_only = false and nothing changed, every refresh reruns both levels
     for _ = 1, runs do
-        L.refresh(rule)
+        refresh(rule)
     end
 
     local rbuf = vim.fn.bufnr("0.logana_result")

@@ -44,11 +44,12 @@ local function set_rule(rule_buf, rg, hl, opened_only)
     api.nvim_buf_set_lines(rule_buf, 0, -1, false, lines)
 end
 
--- refreshes (same as <Enter> in the rule buffer) and returns how many rg
--- processes were spawned
+-- refreshes (same as <Enter> in the rule buffer), waits for the results to
+-- load, and returns how many rg processes were spawned
 local function refresh(rule_buf)
     rg_calls = 0
     L.refresh(rule_buf)
+    vim.wait(5000, function() return not L._busy(rule_buf) end, 1)
     return rg_calls
 end
 
@@ -329,6 +330,64 @@ test("level 1 skips -A/-B context lines and keeps lines that aren't utf-8", func
     refresh(rule)
     eq({ "file: a.log", "2: \255 busy", "" }, result_lines())
     eq({ "match:1:busy" }, highlighted())
+end)
+
+-- a log big enough that level 1 output arrives in many batches
+local function write_big_log(n)
+    local lines = {}
+    for i = 1, n do
+        lines[i] = ("%d resource line padded to be long enough %s busy"):format(i, ("x"):rep(40))
+    end
+    vim.fn.writefile(lines, "a.log")
+end
+
+test("level 1 streamed in batches lists every line once, with highlights on late rows", function()
+    local rule = setup_session()
+    write_big_log(60000) -- ~6 MB of output
+    set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+    refresh(rule)
+    local lines = result_lines()
+    eq(60000 + 2, #lines, "line count")
+    eq("file: a.log", lines[1])
+    for i = 1, 60000 do
+        if not vim.startswith(lines[i + 1], i .. ": " .. i .. " resource") then
+            eq(i .. ": " .. i .. " resource ...", lines[i + 1], "row " .. i)
+        end
+    end
+    eq("", lines[#lines])
+    local hls = L._result_highlights[result_buf()]
+    local last = #lines - 2 -- 0-based row of the last match line
+    local m = hls.match[last][1]
+    eq("resource", lines[last + 1]:sub(m[1] + 1, m[2]))
+    local h = hls.hl[last][1]
+    eq("busy", lines[last + 1]:sub(h[1] + 1, h[2]))
+end)
+
+test("[rg] changed while loading: the old run is dropped", function()
+    local rule = setup_session()
+    write_big_log(60000)
+    set_rule(rule, { "-e 'resource'" })
+    L.refresh(rule)
+    eq(true, L._busy(rule), "busy")
+    set_rule(rule, { "-e '^7 resource'" })
+    refresh(rule)
+    eq({ "file: a.log", "7: 7 resource line padded to be long enough " .. ("x"):rep(40) .. " busy", "" },
+        result_lines())
+end)
+
+test("only [highlight] changed while loading: the run goes on and uses the new rules", function()
+    local rule = setup_session()
+    write_big_log(60000)
+    set_rule(rule, { "-e 'resource'" }, { "-e 'nothing'" })
+    rg_calls = 0
+    L.refresh(rule)
+    set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+    L.refresh(rule)
+    vim.wait(5000, function() return not L._busy(rule) end, 1)
+    eq(2, rg_calls, "rg calls") -- one level 1 run, one level 2 rule
+    eq(60000 + 2, #result_lines(), "line count")
+    local h = L._result_highlights[result_buf()].hl[1][1]
+    eq("busy", result_lines()[2]:sub(h[1] + 1, h[2]))
 end)
 
 test("context lines don't make level 1 parsing slow", function()

@@ -71,7 +71,7 @@ drawn.
 | --- | --- |
 | `setup_session()` | Fresh temp dir with `a.log` opened and a new rule buffer; returns the rule bufnr |
 | `set_rule(rule_buf, rg, hl, opened_only)` | Replace the rule buffer with the given `[rg]` lines, `opened_only` (default `true`), and the given `[highlight]` lines |
-| `refresh(rule_buf)` | Same as pressing `<CR>` in the rule buffer; returns the number of `rg` runs |
+| `refresh(rule_buf)` | Same as pressing `<CR>` in the rule buffer, then waits for the streamed results to load; returns the number of `rg` runs |
 | `result_lines()` | Lines of `0.logana_result` |
 | `highlighted()` | All highlights in the result buffer, in the `match:`/`hl:` string format above |
 | `eq(expected, actual, what)` | Deep-equal assertion |
@@ -114,8 +114,11 @@ is attached. The cases search the camera log the numbers below were taken on:
 `large` is `CLIENT_MGR` (~740k), and `--xl` adds `Info  ` (~2.5M). All cases use the
 same three `[highlight]` rules. For another log, edit `CASES` in the script.
 
-Columns: `rg` level 1 rg run, `parse` its output into the result lines
-(`prep` was a separate pass before the third run below), `set_lines` writing them, `hl` level 2, `save_fold`/`rest_fold` folds,
+Columns (the first three runs below predate streaming): `rg` level 1 rg run, `parse`
+its output into the result lines (`prep` was a separate pass before the third run),
+`set_lines` writing them, `first` time until the first lines are in the buffer,
+`max_batch` the longest a single streamed batch blocked Neovim, `level1` until all
+level 1 lines are in, `hl` level 2, `save_fold`/`rest_fold` folds,
 `total` the whole refresh, `rss_MB` resident memory after the case.
 
 ### Results
@@ -148,4 +151,17 @@ case    res_lines   rg   parse   set_lines   hl   total   rss_MB
 small         887   83       1           0    7      94       16
 medium     132858  136     451          47   40     693      413
 large      740954  371    1592         225  173    2419     2153
+```
+
+Level 1 streamed into the buffer in 1 MB batches (median of 5). `parse` and
+`set_lines` are summed over the batches. The total is ~1.4 s longer than the one-pass
+version, but the first lines show after ~40 ms and Neovim is blocked for at most
+`max_batch` at a time instead of the whole refresh. The longest batch is most likely
+where the result tables grow past 2^19 entries; it is the same with the GC stopped.
+
+```
+case    res_lines   first   parse   set_lines   max_batch   level1    hl   total   rss_MB
+small         887       6       2           0           0       84     7      93       16
+medium     132858      16     518          39          38      606    29     647      221
+large      740954      36    3211         219         136     3549   148    3881     1336
 ```

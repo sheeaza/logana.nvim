@@ -69,6 +69,12 @@ Pressing `<Enter>` checks each level in turn and only reruns what changed:
 - Otherwise level 2 reruns, but only if `[highlight]` changed.
 - With `opened_only = false`, changes to files under cwd can't be detected, so pressing `<Enter>` without changing anything reruns both levels.
 
+Level 1 results load in the background: the first lines show right away and the rest
+are appended while you can keep working. `[highlight]` colors and folds are applied
+once loading is done. Pressing `<Enter>` while results are loading restarts the search
+if `[rg]`/`[file]` changed; otherwise the load continues and uses the new `[highlight]`
+and `[fold]` when it's done.
+
 ### Folding
 The result buffer has one fold per file, so `za`/`zc`/`zo`/`zM`/`zR` work on whole files.
 The folded files are kept in the rule buffer under `[fold]`, one per line. That section
@@ -78,7 +84,10 @@ and pressing `<Enter>` applies it.
 
 ## API
 - `require("logana").setup(opts)`: see `lua/logana/defconfig.lua` for all options.
-- `require("logana").refresh(rule_buf)`: same as pressing `<Enter>` in `rule_buf`.
+- `require("logana").refresh(rule_buf, on_done)`: same as pressing `<Enter>` in `rule_buf`.
+  Results load asynchronously; the optional `on_done()` is called once they, their
+  highlights and folds are applied. It isn't called if the refresh fails, finds no
+  match, or is superseded by another refresh.
 
 ## Highlight Customization
 ```lua

@@ -30,11 +30,15 @@ local PRIORITY_MATCH = 4096
 local PRIORITY_HL = 4097
 
 -- per rule buffer refresh state, used to skip levels that don't need updating:
--- { match_sig, hl_sig, result_buf, result_dirty, attached_buf, hl_input, hl_map, file_rows }
+-- { match_sig, hl_sig, result_buf, result_dirty, attached_buf, hl_input, hl_map, file_rows,
+--   job (level 1 run in progress), gen, writing }
 local RULE_STATE = {}
 
 -- exposed for tests only
 M._result_highlights = RESULT_HIGHLIGHTS
+function M._busy(rule_buf)
+    return RULE_STATE[rule_buf] ~= nil and RULE_STATE[rule_buf].job ~= nil
+end
 
 local function draw_marks(bufnr, row, marks, priority)
     if not marks then
@@ -275,61 +279,41 @@ local function unmark(raw)
     return table.concat(parts), matches
 end
 
---[[
-runs level 1 and builds the result buffer content in one pass over rg's output,
-without per match line intermediate tables:
-{
-    lines = { 'file: <path>', '<lnum>: <text>', ..., '' , ... },  -- buffer lines
-    match = { [row] = { {start_col, end_col}, ... } },            -- 0-based rows
-    file_rows = { { <1-based row of 'file: ' header>, <path> }, ... },
-    hl_input = '<text>\n...',  -- the matched line texts, stdin for level 2
-    hl_map = { row = { [i] = row }, delta = { [i] = col - hl_input offset } },
-}
---]]
-local function collect_matches(ropts)
-    -- not text = true: its '\r\n' gsub over the whole output cost about as much as rg.
-    -- a '\r' line ending stays in the line text, as it did with --json
-    local ok_sys, proc = pcall(vim.system, ropts.args_common)
-    if not ok_sys or not proc then
-        vim.notify("[logana] failed to execute ripgrep", vim.log.levels.WARN)
-        return nil, "failed"
-    end
+-- level 1 parse state, kept across the batches of one rg run:
+-- {
+--     n = <buffer rows written so far>,
+--     match = { [row] = { {start_col, end_col}, ... } },            -- 0-based rows
+--     file_rows = { { <1-based row of 'file: ' header>, <path> }, ... },
+--     hl_texts = { <text>, ... },  -- the matched line texts, stdin for level 2
+--     hl_row = { [i] = row }, hl_delta = { [i] = col - hl_input offset },
+-- }
+local function new_parser()
+    return { n = 0, k = 0, bytes = 0, match = {}, file_rows = {}, hl_texts = {}, hl_row = {}, hl_delta = {} }
+end
 
-    local t0 = now_ms()
-    local res = proc:wait()
-    log.trace(string.format("rg took: %d ms", now_ms() - t0))
+-- parses whole lines of level 1 output; returns the buffer lines they add
+local function parse_batch(p, data)
+    local out, m = {}, 0
+    local n, k, bytes, cur = p.n, p.k, p.bytes, p.cur
+    local match, file_rows, hl_texts, hl_row, hl_delta = p.match, p.file_rows, p.hl_texts, p.hl_row, p.hl_delta
 
-    if res.code == 1 then
-        vim.notify(("[logana] cmd[%s], no match found"):format(table.concat(ropts.args_common, ' ')), vim.log.levels.INFO)
-        return nil, {}
-    end
-    if res.code == 2 then
-        vim.notify(("[logana] ripgrep error for: %s"):format(res.stderr or ("exit code " .. tostring(res.code))), vim.log.levels.WARN)
-        return nil, {}
-    end
-
-    local t1 = now_ms()
-    local lines, match, file_rows, hl_texts, hl_row, hl_delta = {}, {}, {}, {}, {}, {}
-    local n, k, bytes, cur = 0, 0, 0, nil
-
-    -- anchored on '\n' (the output gets one in front): unanchored, a line that
-    -- doesn't match (a context line) is retried from each of its bytes, quadratic
-    -- in its length
-    for path, raw, lnum, text in ('\n' .. res.stdout):gmatch("\n([^%z\n]*)%z((%d+): ([^\n]*))") do
+    -- anchored on '\n' (data gets one in front): unanchored, a line that doesn't
+    -- match (a context line) is retried from each of its bytes, quadratic in its length
+    for path, raw, lnum, text in ('\n' .. data):gmatch("\n([^%z\n]*)%z((%d+): ([^\n]*))") do
         if path ~= cur then
             if cur then
-                n = n + 1
-                lines[n] = ''
+                m, n = m + 1, n + 1
+                out[m] = ''
             end
-            n = n + 1
-            lines[n] = 'file: ' .. path
+            m, n = m + 1, n + 1
+            out[m] = 'file: ' .. path
             file_rows[#file_rows + 1] = { n, path }
             cur = path
         end
         -- markers are only in the text part, so ranges are already buffer columns
         local line, ranges = unmark(raw)
-        n = n + 1
-        lines[n] = line
+        m, n = m + 1, n + 1
+        out[m] = line
         local off = #lnum + 2
         if ranges then
             match[n - 1] = ranges
@@ -341,21 +325,9 @@ local function collect_matches(ropts)
         hl_delta[k] = off - bytes
         bytes = bytes + #text + 1
     end
-    if cur then
-        n = n + 1
-        lines[n] = ''
-    end
 
-    local hl_input = k > 0 and table.concat(hl_texts, '\n') .. '\n' or ''
-    log.trace(string.format("parse rg output took: %d ms", now_ms() - t1))
-
-    return {
-        lines = lines,
-        match = match,
-        file_rows = file_rows,
-        hl_input = hl_input,
-        hl_map = { row = hl_row, delta = hl_delta },
-    }
+    p.n, p.k, p.bytes, p.cur = n, k, bytes, cur
+    return out
 end
 
 -- level 2: run each [highlight] rule through rg over the result line texts (stdin),
@@ -404,24 +376,6 @@ local function collect_highlights(hl_rules, hl_input, hl_map)
     end
 
     return by_row
-end
-
-local function render_results(result_buf, parsed)
-    -- result buffers are fully regenerated on every refresh; there's nothing
-    -- worth undoing to, and snapshotting hundreds of thousands of prior lines
-    -- into the undo tree before each replace made repeated refreshes take seconds.
-    pcall(api.nvim_set_option_value, "undolevels", -1, { buf = result_buf })
-    -- disable swapfile here too, since result buffers reloaded from disk via
-    -- fn.bufadd/fn.bufload bypass create_normal_buffer's swapfile=false
-    pcall(api.nvim_set_option_value, "swapfile", false, { buf = result_buf })
-
-    local t1 = now_ms()
-    api.nvim_buf_set_lines(result_buf, 0, -1, false, parsed.lines)
-    log.trace(string.format("render_results set lines took: %d ms", now_ms() - t1))
-
-    ensure_decoration_provider()
-    -- level 2 highlights are recomputed against the new lines by the caller
-    RESULT_HIGHLIGHTS[result_buf] = { match = parsed.match, hl = {} }
 end
 
 local function get_valid_opened_files()
@@ -575,7 +529,7 @@ end
 
 -- folded files in win; nil when the rows from the last render can't be trusted
 local function capture_folds(st, win)
-    if st.result_dirty or not st.file_rows then
+    if st.job or st.result_dirty or not st.file_rows then
         return nil
     end
     local files = {}
@@ -593,7 +547,7 @@ local function capture_folds(st, win)
 end
 
 local function apply_folds(st, win, files)
-    if st.result_dirty or not st.file_rows then
+    if st.job or st.result_dirty or not st.file_rows then
         return
     end
     setup_fold_win(win)
@@ -642,85 +596,44 @@ local function restore_folds(rule_buf, st)
     st.fold_sig = table.concat(files, '\n')
 end
 
--- level 1 ([rg] -> result lines) only reruns when its inputs changed, or the result
--- buffer is gone / was edited since we rendered it. level 2 ([highlight]) reruns
--- whenever level 1 did, or when the [highlight] rules changed.
--- with opened_only = false, changes to the files under cwd can't be detected, so
--- a refresh where nothing else changed reruns level 1 too.
-local function refresh_from_rule(rule_buf)
-    local t_all = now_ms()
-    local ropts, err = get_runtime_opts(rule_buf)
-    if err then
-        return nil, "get runtime opts failed"
+-- track user edits of the result buffer (changedtick can't be used, ':w' bumps
+-- it too). our own writes set st.writing around them, so they don't count.
+local function attach_result(st, result_buf)
+    if st.attached_buf == result_buf then
+        return
     end
+    st.attached_buf = result_buf
+    api.nvim_buf_attach(result_buf, false, {
+        on_lines = function()
+            if st.attached_buf ~= result_buf then
+                return true -- detach, the rule now renders elsewhere
+            end
+            if not st.writing then
+                st.result_dirty = true
+            end
+        end,
+        on_reload = function()
+            st.result_dirty = true
+        end,
+        on_detach = function()
+            if st.attached_buf == result_buf then
+                st.attached_buf = nil
+            end
+        end,
+    })
+end
 
-    local st = RULE_STATE[rule_buf] or {}
-    RULE_STATE[rule_buf] = st
-
-    -- record the result window's folds before re-rendering, unless [fold] was
-    -- edited by hand since, then that wins and is applied below
-    local fold_edited = table.concat(read_fold_section(rule_buf), '\n') ~= st.fold_sig
-    local fold_win = st.result_buf and api.nvim_buf_is_valid(st.result_buf) and fn.bufwinid(st.result_buf) or -1
-    if not fold_edited and fold_win ~= -1 then
-        local t = now_ms()
-        save_folds(rule_buf, st, fold_win)
-        log.trace(string.format("save_folds took: %d ms", now_ms() - t))
-    end
-    local rerendered = false
-
-    local result_intact = st.result_buf and api.nvim_buf_is_valid(st.result_buf)
-        and not st.result_dirty and RESULT_HIGHLIGHTS[st.result_buf] ~= nil
-
-    local unchanged = st.hl_sig == ropts.hl_sig and not fold_edited
-    if not result_intact or st.match_sig ~= ropts.match_sig
-        or (unchanged and not ropts.opened_only) then
-        local t0 = now_ms()
-        local parsed, merr = collect_matches(ropts)
-        if merr then
-            return nil, "collect_matches failed"
-        end
-        log.trace(string.format("collect_matches took: %d ms", now_ms() - t0))
-
-        local result_buf = get_result_buf(rule_buf)
-        local t1 = now_ms()
-        render_results(result_buf, parsed)
-        st.hl_input, st.hl_map, st.file_rows = parsed.hl_input, parsed.hl_map, parsed.file_rows
-        log.trace(string.format("render_results took: %d ms", now_ms() - t1))
-
-        -- track user edits of the result buffer (changedtick can't be used, ':w'
-        -- bumps it too). on_lines also fires for our own set_lines in
-        -- render_results above, hence resetting result_dirty after it.
-        if st.attached_buf ~= result_buf then
-            st.attached_buf = result_buf
-            api.nvim_buf_attach(result_buf, false, {
-                on_lines = function()
-                    if st.attached_buf ~= result_buf then
-                        return true -- detach, the rule now renders elsewhere
-                    end
-                    st.result_dirty = true
-                end,
-                on_reload = function()
-                    st.result_dirty = true
-                end,
-                on_detach = function()
-                    if st.attached_buf == result_buf then
-                        st.attached_buf = nil
-                    end
-                end,
-            })
-        end
-        st.result_buf = result_buf
-        st.result_dirty = false
-        st.match_sig = ropts.match_sig
-        st.hl_sig = nil
-        rerendered = true
-    end
-
-    -- show the result buffer if it isn't, e.g. first refresh or its window was closed
-    if fn.bufwinid(st.result_buf) == -1 then
+-- show the result buffer if it isn't, e.g. first refresh or its window was closed
+local function show_result(rule_buf, result_buf)
+    if fn.bufwinid(result_buf) == -1 then
         local rule_win = fn.bufwinid(rule_buf)
-        result_open_win(st.result_buf, rule_win ~= -1 and rule_win or api.nvim_get_current_win())
+        result_open_win(result_buf, rule_win ~= -1 and rule_win or api.nvim_get_current_win())
     end
+end
+
+-- level 2 and folds, once level 1 is done (or didn't need to run)
+local function finish_refresh(rule_buf, st, ropts, rerendered, fold_edited, t_all, on_done)
+    show_result(rule_buf, st.result_buf)
 
     if st.hl_sig ~= ropts.hl_sig then
         local t2 = now_ms()
@@ -737,6 +650,225 @@ local function refresh_from_rule(rule_buf)
         log.trace(string.format("restore_folds took: %d ms", now_ms() - t3))
     end
     log.trace(string.format("refresh took: %d ms", now_ms() - t_all))
+    if on_done then
+        on_done()
+    end
+end
+
+-- rg output is parsed and appended to the result buffer in batches of about this
+-- many bytes, each in its own main loop callback, so neovim stays responsive and
+-- the first lines show while rg is still running
+local BATCH_BYTES = 1024 * 1024
+
+-- level 1, streamed: the first batch replaces the result buffer, later ones append.
+-- with no match the buffer keeps its old content. job.ropts may be swapped by a
+-- refresh that only changed [highlight] while this runs; finish uses the latest.
+local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
+    local result_buf = get_result_buf(rule_buf)
+    st.gen = (st.gen or 0) + 1
+    local gen = st.gen
+    local job = {
+        sig = ropts.match_sig, ropts = ropts, fold_edited = fold_edited, on_done = on_done,
+        chunks = {}, head = 1, tail = 0, rest = '', parser = new_parser(),
+        t0 = now_ms(), parse_ms = 0, set_ms = 0, max_ms = 0,
+    }
+    st.job = job
+    -- an interrupted or failed run leaves a partial buffer, the next refresh reruns
+    st.match_sig = nil
+
+    local function done(res)
+        st.job = nil
+        if res.code == 2 then
+            vim.notify(("[logana] ripgrep error for: %s"):format(res.stderr or "exit code 2"), vim.log.levels.WARN)
+        end
+        if not job.started then
+            if res.code == 1 then
+                vim.notify(("[logana] cmd[%s], no match found"):format(table.concat(ropts.args_common, ' ')),
+                    vim.log.levels.INFO)
+            end
+            return
+        end
+
+        local p = job.parser
+        if p.cur then
+            st.writing = true
+            api.nvim_buf_set_lines(result_buf, -1, -1, false, { '' })
+            st.writing = false
+        end
+        log.trace(string.format("first lines took: %d ms", job.first_ms))
+        log.trace(string.format("parse rg output took: %d ms", job.parse_ms))
+        log.trace(string.format("set lines took: %d ms", job.set_ms))
+        log.trace(string.format("max batch took: %d ms", job.max_ms))
+        log.trace(string.format("level 1 took: %d ms", now_ms() - job.t0))
+
+        st.hl_input = p.k > 0 and table.concat(p.hl_texts, '\n') .. '\n' or ''
+        st.hl_map = { row = p.hl_row, delta = p.hl_delta }
+        st.file_rows = p.file_rows
+        st.match_sig = job.sig
+        st.hl_sig = nil
+        finish_refresh(rule_buf, st, job.ropts, true, job.fold_edited, t_all, job.on_done)
+    end
+
+    local function write(lines)
+        st.writing = true
+        if not job.started then
+            job.started = true
+            job.first_ms = now_ms() - job.t0
+            -- result buffers are fully regenerated on every refresh; there's nothing
+            -- worth undoing to, and snapshotting hundreds of thousands of prior lines
+            -- into the undo tree before each replace made repeated refreshes take seconds.
+            pcall(api.nvim_set_option_value, "undolevels", -1, { buf = result_buf })
+            -- disable swapfile here too, since result buffers reloaded from disk via
+            -- fn.bufadd/fn.bufload bypass create_normal_buffer's swapfile=false
+            pcall(api.nvim_set_option_value, "swapfile", false, { buf = result_buf })
+            attach_result(st, result_buf)
+            api.nvim_buf_set_lines(result_buf, 0, -1, false, lines)
+            st.result_buf = result_buf
+            st.result_dirty = false
+            ensure_decoration_provider()
+            -- filled in as batches come; level 2 is computed when rg is done
+            RESULT_HIGHLIGHTS[result_buf] = { match = job.parser.match, hl = {} }
+            -- the old folds don't match the new lines, they're rebuilt when done
+            for _, win in ipairs(fn.win_findbuf(result_buf)) do
+                api.nvim_win_call(win, function() vim.cmd('silent! normal! zE') end)
+            end
+            show_result(rule_buf, result_buf)
+        else
+            api.nvim_buf_set_lines(result_buf, -1, -1, false, lines)
+        end
+        st.writing = false
+    end
+
+    local pump
+    local function schedule_pump()
+        if not job.pumping then
+            job.pumping = true
+            vim.schedule(pump)
+        end
+    end
+
+    pump = function()
+        job.pumping = false
+        if st.gen ~= gen then
+            return
+        end
+        if not api.nvim_buf_is_valid(result_buf) then
+            st.job = nil
+            pcall(job.proc.kill, job.proc, 15)
+            return
+        end
+
+        local t = now_ms()
+        local parts, size = { job.rest }, #job.rest
+        while job.head <= job.tail and size < BATCH_BYTES do
+            local c = job.chunks[job.head]
+            job.chunks[job.head] = nil
+            job.head = job.head + 1
+            parts[#parts + 1] = c
+            size = size + #c
+        end
+        local data = table.concat(parts)
+        -- rg ends every line with '\n'; keep a partial last line for the next batch
+        local cut = data:match('^.*()\n')
+        if cut then
+            job.rest = data:sub(cut + 1)
+            data = data:sub(1, cut)
+        else
+            job.rest, data = data, ''
+        end
+        local lines = parse_batch(job.parser, data)
+        local t1 = now_ms()
+        if #lines > 0 then
+            write(lines)
+        end
+        local t2 = now_ms()
+        job.parse_ms = job.parse_ms + t1 - t
+        job.set_ms = job.set_ms + t2 - t1
+        job.max_ms = math.max(job.max_ms, t2 - t)
+
+        if job.head <= job.tail then
+            schedule_pump()
+        elseif job.exit then
+            done(job.exit)
+        end
+    end
+
+    -- not text = true: its '\r\n' gsub over the whole output cost about as much as rg.
+    -- a '\r' line ending stays in the line text, as it did with --json.
+    -- both callbacks run in a fast event context, they only queue work for pump
+    local ok, proc = pcall(vim.system, ropts.args_common, {
+        stdout = function(_, data)
+            if data and st.gen == gen then
+                job.tail = job.tail + 1
+                job.chunks[job.tail] = data
+                schedule_pump()
+            end
+        end,
+    }, function(res)
+        vim.schedule(function()
+            if st.gen == gen then
+                job.exit = res
+                schedule_pump()
+            end
+        end)
+    end)
+    if not ok or not proc then
+        st.job = nil
+        vim.notify("[logana] failed to execute ripgrep", vim.log.levels.WARN)
+        return
+    end
+    job.proc = proc
+end
+
+-- level 1 ([rg] -> result lines) only reruns when its inputs changed, or the result
+-- buffer is gone / was edited since we rendered it. level 2 ([highlight]) reruns
+-- whenever level 1 did, or when the [highlight] rules changed.
+-- with opened_only = false, changes to the files under cwd can't be detected, so
+-- a refresh where nothing else changed reruns level 1 too.
+-- level 1 runs asynchronously; on_done is called once everything is applied.
+local function refresh_from_rule(rule_buf, on_done)
+    local t_all = now_ms()
+    local ropts, err = get_runtime_opts(rule_buf)
+    if err then
+        return nil, "get runtime opts failed"
+    end
+
+    local st = RULE_STATE[rule_buf] or {}
+    RULE_STATE[rule_buf] = st
+
+    -- level 1 is still loading the same search: let it finish, with the new
+    -- [highlight] rules and [fold] applied when it does
+    if st.job and st.job.sig == ropts.match_sig then
+        st.job.ropts = ropts
+        st.job.on_done = on_done
+        return
+    end
+    if st.job then
+        pcall(st.job.proc.kill, st.job.proc, 15)
+        st.job = nil
+    end
+
+    -- record the result window's folds before re-rendering, unless [fold] was
+    -- edited by hand since, then that wins and is applied below
+    local fold_edited = table.concat(read_fold_section(rule_buf), '\n') ~= st.fold_sig
+    local fold_win = st.result_buf and api.nvim_buf_is_valid(st.result_buf) and fn.bufwinid(st.result_buf) or -1
+    if not fold_edited and fold_win ~= -1 then
+        local t = now_ms()
+        save_folds(rule_buf, st, fold_win)
+        log.trace(string.format("save_folds took: %d ms", now_ms() - t))
+    end
+
+    local result_intact = st.result_buf and api.nvim_buf_is_valid(st.result_buf)
+        and not st.result_dirty and RESULT_HIGHLIGHTS[st.result_buf] ~= nil
+
+    local unchanged = st.hl_sig == ropts.hl_sig and not fold_edited
+    if not result_intact or st.match_sig ~= ropts.match_sig
+        or (unchanged and not ropts.opened_only) then
+        run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
+        return
+    end
+
+    finish_refresh(rule_buf, st, ropts, false, fold_edited, t_all, on_done)
 end
 
 local function find_rg_section_end(buf)
@@ -937,9 +1069,11 @@ local function setup_keybinding()
     })
 end
 
--- same as pressing <Enter> in rule_buf
-function M.refresh(rule_buf)
-    return refresh_from_rule(rule_buf)
+-- same as pressing <Enter> in rule_buf. results load asynchronously; on_done is
+-- called once they and their highlights and folds are applied (not when the
+-- refresh fails, finds no match, or is superseded by another one)
+function M.refresh(rule_buf, on_done)
+    return refresh_from_rule(rule_buf, on_done)
 end
 
 function M.setup(opts)
