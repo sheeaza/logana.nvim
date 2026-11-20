@@ -532,8 +532,9 @@ end)
 
 -- every test runs with the ffi scanner (LuaJIT) and with the lua parser
 local failed, total = 0, 0
-for _, ffi_mode in ipairs(L._ffi and { true, false } or { false }) do
-    L._ffi = ffi_mode
+local scan = require("logana.scan")
+for _, ffi_mode in ipairs(scan.enabled and { true, false } or { false }) do
+    scan.enabled = ffi_mode
     for _, t in ipairs(tests) do
         total = total + 1
         local ok, err = pcall(t.f)
