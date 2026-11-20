@@ -74,9 +74,13 @@ Numbers are for the `large` case of `tests/bench.lua` (740k result lines), see
 Next, after `posix_spawn` (`large` total ~803 ms: parse ~342, `:read` ~248, the rest
 waiting on rg and the pump). For static log files; re-searching only the bytes a
 growing log appended is out of scope.
-- [ ] `scan_batch` copies and tests byte by byte (~2.5 ns/byte). Find `\n` and the
+- [x] `scan_batch` copies and tests byte by byte (~2.5 ns/byte). Find `\n` and the
   match markers with `memchr`, copy the runs between them with `ffi.copy`, compare
   the path with `memcmp`.
+  Done. Measured on a synthetic 500 MB log (8.8M lines, `large` is `Display`, 1.1M
+  rows, i5-12500H): `scan_batch` alone over the 94 MB rg output 264 -> 176 ms; in
+  the bench `parse` 419 -> 282 ms, but `level1` only 974 -> 915 ms, rg's pipe is
+  the limit now (next item).
 - [ ] rg writes to a pipe of 64 KB that nothing reads while a batch runs on the main
   thread, so rg stalls; each chunk is also a Lua string, joined and cut per batch.
   Point rg's stdout at a memfd (`posix_spawn_file_actions_adddup2`), `mmap` it and

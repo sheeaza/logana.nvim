@@ -16,16 +16,20 @@ for _, decl in ipairs({ 'void *fopen(const char *path, const char *mode);',
     'size_t fwrite(const void *buf, size_t size, size_t n, void *f);', 'int fclose(void *f);',
     -- linux only. long is off_t for the unsuffixed symbols, also on 32 bit
     'int memfd_create(const char *name, unsigned int flags);', 'int ftruncate(int fd, long len);',
-    'long pwrite(int fd, const void *buf, size_t n, long off);' }) do
+    'long pwrite(int fd, const void *buf, size_t n, long off);',
+    'void *memchr(const void *s, int c, size_t n);', 'int memcmp(const void *a, const void *b, size_t n);' }) do
     pcall(ffi.cdef, decl)
 end
 
-local function copy_bytes(dst, o, src, s, e)
-    for j = s, e - 1 do
-        dst[o] = src[j]
-        o = o + 1
-    end
-    return o
+local C = ffi.C
+local u8p = ffi.typeof('const uint8_t *')
+local FILE_PREFIX = 'file: '
+
+-- offset of the first byte c in src[i, e), or e. memchr through the ffi: the
+-- lines are scanned in C, not one byte per loop iteration in lua
+local function find(src, i, e, c)
+    local r = C.memchr(src + i, c, e - i)
+    return r == nil and e or tonumber(ffi.cast(u8p, r) - src)
 end
 
 -- parses whole lines of level 1 output (level1.lua), appends the buffer lines to p.out, p.o bytes so far,
@@ -41,7 +45,7 @@ local function scan_batch(p, data)
         p.out = grown
     end
     local out = p.out
-    local src = ffi.cast('const uint8_t *', data)
+    local src = ffi.cast(u8p, data)
     local row, k = p.n, p.k
     local file_rows = p.file_rows
     local first, count, cols = p.match.first, p.match.count, p.match.cols
@@ -49,63 +53,62 @@ local function scan_batch(p, data)
     local i, o = 0, p.o
 
     while i < n do
-        local ps = i
-        while src[i] ~= 0 and src[i] ~= 10 do
-            i = i + 1
-        end
+        local e = find(src, i, n, 10)
         -- '<path>\0<lnum>: <text>'. context lines ('<lnum>-') and the '--' between
         -- them are skipped
-        if src[i] == 0 then
-            local plen = i - ps
-            i = i + 1
+        local z = find(src, i, e, 0)
+        if z < e then
+            local ps, plen = i, z - i
+            i = z + 1
             local ls = i
             while src[i] >= 48 and src[i] <= 57 do
                 i = i + 1
             end
             if i > ls and src[i] == 58 and src[i + 1] == 32 then
                 i = i + 2
-                local same = plen == p.plen
-                for j = 0, same and plen - 1 or -1 do
-                    if src[ps + j] ~= p.path[j] then
-                        same = false
-                        break
-                    end
-                end
-                if not same then
+                if plen ~= p.plen or C.memcmp(src + ps, p.path, plen) ~= 0 then
                     if p.cur then
                         out[o], o, row = 10, o + 1, row + 1
                     end
-                    o = copy_bytes(out, o, ffi.cast('const uint8_t *', 'file: '), 0, 6)
-                    o = copy_bytes(out, o, src, ps, ps + plen)
+                    ffi.copy(out + o, FILE_PREFIX, 6)
+                    ffi.copy(out + o + 6, src + ps, plen)
+                    o = o + 6 + plen
                     out[o], o, row = 10, o + 1, row + 1
                     if plen > p.pcap then
                         p.pcap = 2 * plen
                         p.path = ffi.new('uint8_t[?]', p.pcap)
                     end
-                    copy_bytes(p.path, 0, src, ps, ps + plen)
+                    ffi.copy(p.path, src + ps, plen)
                     p.plen = plen
                     p.cur = ffi.string(src + ps, plen)
                     file_rows[#file_rows + 1] = { row, p.cur }
                 end
 
                 local lo = o
-                o = copy_bytes(out, o, src, ls, i)
+                ffi.copy(out + o, src + ls, i - ls)
+                o = o + i - ls
+                -- the text up to each marker is copied, the markers dropped; a stray
+                -- one in a log line only shifts its own columns
                 local c0, ms = nc, nil
-                local c = src[i]
-                while c ~= 10 do
-                    -- markers are dropped; a stray one in a log line only shifts its own columns
-                    if c == 30 then
+                local s30, s31 = find(src, i, e, 30), find(src, i, e, 31)
+                while true do
+                    local m = s30 < s31 and s30 or s31
+                    ffi.copy(out + o, src + i, m - i)
+                    o = o + m - i
+                    if m == e then
+                        break
+                    end
+                    if m == s30 then
                         ms = o - lo
-                    elseif c == 31 then
+                        s30 = find(src, m + 1, e, 30)
+                    else
                         if ms then
                             cols[nc + 1], cols[nc + 2] = ms, o - lo
                             nc, ms = nc + 2, nil
                         end
-                    else
-                        out[o], o = c, o + 1
+                        s31 = find(src, m + 1, e, 31)
                     end
-                    i = i + 1
-                    c = src[i]
+                    i = m + 1
                 end
                 if nc > c0 then
                     first[row], count[row] = c0 + 1, (nc - c0) / 2
@@ -113,10 +116,7 @@ local function scan_batch(p, data)
                 out[o], o, row, k = 10, o + 1, row + 1, k + 1
             end
         end
-        while src[i] ~= 10 do
-            i = i + 1
-        end
-        i = i + 1
+        i = e + 1
     end
 
     p.n, p.k, p.o = row, k, o
