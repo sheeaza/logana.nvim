@@ -68,7 +68,12 @@ local function highlighted()
     local out = {}
     for row, line in ipairs(result_lines()) do
         for _, level in ipairs({ "match", "hl" }) do
-            local marks = level == "match" and L._match_ranges(rb, row - 1) or hls.hl[row - 1]
+            local marks
+            if level == "match" then
+                marks = L._match_ranges(rb, row - 1)
+            else
+                marks = hls.hl[row - 1]
+            end
             for _, m in ipairs(marks or {}) do
                 local s = ("%s:%d:%s"):format(level, row - 1, line:sub(m[1] + 1, m[2]))
                 table.insert(out, m[3] and (s .. ":" .. m[3]) or s)
@@ -322,6 +327,16 @@ test("level 1 columns are right with several matches per line and multibyte text
     set_rule(rule, { "-e 'busy'", "-e '日本'" })
     refresh(rule)
     eq({ "match:1:日本", "match:1:busy", "match:1:busy", "match:2:busy" }, highlighted())
+end)
+
+test("with -v, level 1 lists the lines without colors and level 2 still colors them", function()
+    local rule = setup_session()
+    vim.fn.writefile({ "keep busy", "drop resource", "keep: 日本 busy" }, "a.log")
+    set_rule(rule, { "-v", "-e 'resource'" }, { "-e 'busy'" })
+    refresh(rule)
+    local lines = result_lines()
+    eq({ "1: keep busy", "3: keep: 日本 busy" }, { lines[2], lines[3] })
+    eq({ "hl:1:busy:1", "hl:2:busy:1" }, highlighted())
 end)
 
 test("level 1 skips -A/-B context lines and keeps lines that aren't utf-8", function()

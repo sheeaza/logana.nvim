@@ -180,3 +180,16 @@ small         887       6       2           0           0       85     7      93
 medium     132858      10     333          37          17      422    23     457      211
 large      740954      45    2239         198         137     2569   100    2727      907
 ```
+
+`<lnum>: ` and the line text captured as positions instead of strings, two strings
+less per line (median of 3). Each string made is interned (hashed) and later swept,
+which is most of the parsing cost. Going further, taking the pieces around the match
+markers straight from the batch by position, without the whole line as a string,
+didn't help: the anchored pattern searches it needs cost as much as they save.
+
+```
+case    res_lines   first   parse   set_lines   max_batch   level1    hl   total   rss_MB
+small         887       6       1           0           0       84     8      93       15
+medium     132858      10     247          36          15      338    38     393      198
+large      740954      27    1562         193          78     1884    98    2048      911
+```
