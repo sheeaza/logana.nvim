@@ -165,3 +165,18 @@ small         887       6       2           0           0       84     7      93
 medium     132858      16     518          39          38      606    29     647      221
 large      740954      36    3211         219         136     3549   148    3881     1336
 ```
+
+Level 1 match ranges kept in flat number arrays instead of a `{ {s, e} }` table per
+row, and the level 2 input joined per batch instead of kept as one string per line
+(median of 3). While streaming, the GC kept re-marking the ~1.5M small tables and
+~740k strings that were still alive; with the GC stopped during the load, `parse` was
+~1.5 s. These are the objects it re-marked, so dropping them gives most of that back.
+The one-pass version didn't show this: the previous result, still alive while it
+parsed, made the heap big enough that the GC rarely ran.
+
+```
+case    res_lines   first   parse   set_lines   max_batch   level1    hl   total   rss_MB
+small         887       6       2           0           0       85     7      93       15
+medium     132858      10     333          37          17      422    23     457      211
+large      740954      45    2239         198         137     2569   100    2727      907
+```

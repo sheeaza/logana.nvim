@@ -68,7 +68,8 @@ local function highlighted()
     local out = {}
     for row, line in ipairs(result_lines()) do
         for _, level in ipairs({ "match", "hl" }) do
-            for _, m in ipairs(hls[level][row - 1] or {}) do
+            local marks = level == "match" and L._match_ranges(rb, row - 1) or hls.hl[row - 1]
+            for _, m in ipairs(marks or {}) do
                 local s = ("%s:%d:%s"):format(level, row - 1, line:sub(m[1] + 1, m[2]))
                 table.insert(out, m[3] and (s .. ":" .. m[3]) or s)
             end
@@ -357,7 +358,7 @@ test("level 1 streamed in batches lists every line once, with highlights on late
     eq("", lines[#lines])
     local hls = L._result_highlights[result_buf()]
     local last = #lines - 2 -- 0-based row of the last match line
-    local m = hls.match[last][1]
+    local m = L._match_ranges(result_buf(), last)[1]
     eq("resource", lines[last + 1]:sub(m[1] + 1, m[2]))
     local h = hls.hl[last][1]
     eq("busy", lines[last + 1]:sub(h[1] + 1, h[2]))

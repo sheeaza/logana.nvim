@@ -16,7 +16,11 @@ local SPLIT_DIR = { top = 'below', bottom = 'above', left = 'right', right = 'le
 
 -- highlight ranges per result buffer, keyed by 0-based row:
 -- {
---     match = { [row] = { {start_col, end_col}, ... } },           -- level 1, [rg]
+--     -- level 1, [rg]: the row's ranges are cols[first[row]], cols[first[row] + 1], ...
+--     -- for count[row] pairs. only numbers, no table per row: the incremental GC
+--     -- re-marks every live table while a large result streams in, which made it
+--     -- cost as much as the parsing
+--     match = { first = { [row] = i }, count = { [row] = n }, cols = { s1, e1, s2, e2, ... } },
 --     hl    = { [row] = { {start_col, end_col, hl_idx}, ... } },   -- level 2, [highlight]
 -- }
 -- highlighted lazily via decoration provider (ephemeral extmarks) instead of eagerly,
@@ -39,22 +43,28 @@ M._result_highlights = RESULT_HIGHLIGHTS
 function M._busy(rule_buf)
     return RULE_STATE[rule_buf] ~= nil and RULE_STATE[rule_buf].job ~= nil
 end
+-- level 1 ranges of a row as { {start_col, end_col}, ... }, or nil
+function M._match_ranges(bufnr, row)
+    local m = RESULT_HIGHLIGHTS[bufnr].match
+    local i = m.first[row]
+    if not i then
+        return nil
+    end
+    local out = {}
+    for j = i, i + 2 * m.count[row] - 1, 2 do
+        out[#out + 1] = { m.cols[j], m.cols[j + 1] }
+    end
+    return out
+end
 
-local function draw_marks(bufnr, row, marks, priority)
-    if not marks then
-        return
-    end
-    local names = M.config.hi_group_names
-    for _, hi in ipairs(marks) do
-        local name = hi[3] and names[(hi[3] - 1) % #names + 1] or M.config.hi_match_group
-        api.nvim_buf_set_extmark(bufnr, NS_MATCH, row, hi[1], {
-            end_row = row,
-            end_col = hi[2],
-            hl_group = name,
-            priority = priority,
-            ephemeral = true,
-        })
-    end
+local function draw_mark(bufnr, row, s, e, hl_group, priority)
+    api.nvim_buf_set_extmark(bufnr, NS_MATCH, row, s, {
+        end_row = row,
+        end_col = e,
+        hl_group = hl_group,
+        priority = priority,
+        ephemeral = true,
+    })
 end
 
 local function ensure_decoration_provider()
@@ -69,8 +79,18 @@ local function ensure_decoration_provider()
         end,
         on_line = function(_, _, bufnr, row)
             local hls = RESULT_HIGHLIGHTS[bufnr]
-            draw_marks(bufnr, row, hls.match[row], PRIORITY_MATCH)
-            draw_marks(bufnr, row, hls.hl[row], PRIORITY_HL)
+            local m = hls.match
+            local i = m.first[row]
+            if i then
+                local cols, group = m.cols, M.config.hi_match_group
+                for j = i, i + 2 * m.count[row] - 1, 2 do
+                    draw_mark(bufnr, row, cols[j], cols[j + 1], group, PRIORITY_MATCH)
+                end
+            end
+            local names = M.config.hi_group_names
+            for _, hi in ipairs(hls.hl[row] or {}) do
+                draw_mark(bufnr, row, hi[1], hi[2], names[(hi[3] - 1) % #names + 1], PRIORITY_HL)
+            end
         end,
     })
 end
@@ -249,19 +269,20 @@ local LEVEL1_ARGS = { '--color', 'never', '--no-heading', '--with-filename', '--
     '--no-column', '--null', '--field-match-separator', ': ',
     '--replace', MARK_S .. '${0}' .. MARK_E }
 
--- strips the markers from a level 1 line; returns the text and its match ranges,
--- or nil ranges when there are none (e.g. with -v)
-local function unmark(raw)
+-- strips the markers from a level 1 line, appending its match ranges to cols after
+-- index c; returns the text and the number of ranges (0 e.g. with -v)
+local function unmark(raw, cols, c)
     local a = raw:find(MARK_S, 1, true)
     if not a then
-        return raw, nil
+        return raw, 0
     end
     local b = raw:find(MARK_E, a + 1, true)
     -- most lines have one match, plain sub/concat is ~1/3 faster for those
     if b and not raw:find(MARK_S, b + 1, true) then
-        return raw:sub(1, a - 1) .. raw:sub(a + 1, b - 1) .. raw:sub(b + 1), { { a - 1, b - 2 } }
+        cols[c + 1], cols[c + 2] = a - 1, b - 2
+        return raw:sub(1, a - 1) .. raw:sub(a + 1, b - 1) .. raw:sub(b + 1), 1
     end
-    local parts, matches, len, s = {}, {}, 0, 1
+    local parts, nm, len, s = {}, 0, 0, 1
     while a do
         b = raw:find(MARK_E, a + 1, true)
         if not b then
@@ -271,31 +292,36 @@ local function unmark(raw)
         parts[#parts + 1] = raw:sub(s, a - 1)
         parts[#parts + 1] = raw:sub(a + 1, b - 1)
         len = start + b - a - 1
-        matches[#matches + 1] = { start, len }
+        cols[c + 1], cols[c + 2] = start, len
+        c, nm = c + 2, nm + 1
         s = b + 1
         a = raw:find(MARK_S, s, true)
     end
     parts[#parts + 1] = raw:sub(s)
-    return table.concat(parts), matches
+    return table.concat(parts), nm
 end
 
 -- level 1 parse state, kept across the batches of one rg run:
 -- {
 --     n = <buffer rows written so far>,
---     match = { [row] = { {start_col, end_col}, ... } },            -- 0-based rows
+--     match = { first, count, cols },  -- as in RESULT_HIGHLIGHTS, 0-based rows
 --     file_rows = { { <1-based row of 'file: ' header>, <path> }, ... },
---     hl_texts = { <text>, ... },  -- the matched line texts, stdin for level 2
+--     hl_chunks = { <text>\n<text>\n..., ... },  -- the matched line texts, stdin for
+--                                               -- level 2, one string per batch
 --     hl_row = { [i] = row }, hl_delta = { [i] = col - hl_input offset },
 -- }
 local function new_parser()
-    return { n = 0, k = 0, bytes = 0, match = {}, file_rows = {}, hl_texts = {}, hl_row = {}, hl_delta = {} }
+    return { n = 0, k = 0, bytes = 0, match = { first = {}, count = {}, cols = {} }, file_rows = {},
+        hl_chunks = {}, hl_row = {}, hl_delta = {} }
 end
 
 -- parses whole lines of level 1 output; returns the buffer lines they add
 local function parse_batch(p, data)
-    local out, m = {}, 0
+    local out, m, texts, t = {}, 0, {}, 0
     local n, k, bytes, cur = p.n, p.k, p.bytes, p.cur
-    local match, file_rows, hl_texts, hl_row, hl_delta = p.match, p.file_rows, p.hl_texts, p.hl_row, p.hl_delta
+    local file_rows, hl_row, hl_delta = p.file_rows, p.hl_row, p.hl_delta
+    local first, count, cols = p.match.first, p.match.count, p.match.cols
+    local c = #cols
 
     -- anchored on '\n' (data gets one in front): unanchored, a line that doesn't
     -- match (a context line) is retried from each of its bytes, quadratic in its length
@@ -311,21 +337,26 @@ local function parse_batch(p, data)
             cur = path
         end
         -- markers are only in the text part, so ranges are already buffer columns
-        local line, ranges = unmark(raw)
+        local line, nm = unmark(raw, cols, c)
         m, n = m + 1, n + 1
         out[m] = line
         local off = #lnum + 2
-        if ranges then
-            match[n - 1] = ranges
+        if nm > 0 then
+            first[n - 1], count[n - 1] = c + 1, nm
+            c = c + 2 * nm
             text = line:sub(off + 1)
         end
-        k = k + 1
-        hl_texts[k] = text
+        k, t = k + 1, t + 1
+        texts[t] = text
         hl_row[k] = n - 1
         hl_delta[k] = off - bytes
         bytes = bytes + #text + 1
     end
 
+    if t > 0 then
+        texts[t + 1] = '' -- every text ends with '\n'
+        p.hl_chunks[#p.hl_chunks + 1] = table.concat(texts, '\n')
+    end
     p.n, p.k, p.bytes, p.cur = n, k, bytes, cur
     return out
 end
@@ -774,7 +805,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         log.trace(string.format("max batch took: %d ms", job.max_ms))
         log.trace(string.format("level 1 took: %d ms", now_ms() - job.t0))
 
-        st.hl_input = p.k > 0 and table.concat(p.hl_texts, '\n') .. '\n' or ''
+        st.hl_input = table.concat(p.hl_chunks)
         st.hl_map = { row = p.hl_row, delta = p.hl_delta }
         st.file_rows = p.file_rows
         st.match_sig = job.sig
