@@ -49,7 +49,8 @@ Numbers are for the `large` case of `tests/bench.lua` (740k result lines), see
   with the previous one), so context lines are skipped as before and no `-A 0 -B 0`
   is needed; `:read ++ff=unix ++enc=utf-8 ++bad=keep` instead of `++bin`, which set
   'binary'; one `:read` per 1 MB or 100 ms instead of per pump batch (~100 KB), and
-  the temp file in `stdpath('run')`: rewriting it on a disk cost more than reading it.
+  the temp file in memory: an anonymous memfd on Linux (`:read /proc/self/fd/<n>`),
+  else a file in `stdpath('run')`. Rewriting it on a disk cost more than reading it.
 - [ ] Search one multi-GB file with several threads (klogg does this: 10k-line
   chunks to N matcher threads, hits stored as `chunk start + offset` in a roaring
   bitmap, which merges in any order; lnav doesn't split a file). rg uses one thread per file

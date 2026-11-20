@@ -375,7 +375,10 @@ M._ffi = has_ffi -- tests turn it off to cover the lua parser
 if has_ffi then
     -- each on its own, another plugin may have declared some already
     for _, decl in ipairs({ 'void *fopen(const char *path, const char *mode);',
-        'size_t fwrite(const void *buf, size_t size, size_t n, void *f);', 'int fclose(void *f);' }) do
+        'size_t fwrite(const void *buf, size_t size, size_t n, void *f);', 'int fclose(void *f);',
+        -- linux only. long is off_t for the unsuffixed symbols, also on 32 bit
+        'int memfd_create(const char *name, unsigned int flags);', 'int ftruncate(int fd, long len);',
+        'long pwrite(int fd, const void *buf, size_t n, long off);' }) do
         pcall(ffi.cdef, decl)
     end
 end
@@ -498,26 +501,43 @@ local function scan_batch(p, data)
     p.n, p.k, p.bytes, p.o = row, k, bytes, o
 end
 
--- in the run dir, a tmpfs on most linux systems: on a disk, rewriting the file
--- before each ':read' cost more than the read
+-- the file read_scanned puts the lines in for ':read', returns its path and fd:
+-- on linux an anonymous memfd, memory backed and gone with neovim, opened once.
+-- else a file in the run dir, a tmpfs on most linux systems: on a disk,
+-- rewriting the file before each ':read' cost more than the read
+local scan_fd
 local function scan_tmp()
+    if not scan_fd then
+        local ok, fd = pcall(function() return ffi.C.memfd_create('logana', 1) end) -- MFD_CLOEXEC
+        scan_fd = ok and fd or -1
+    end
+    if scan_fd >= 0 then
+        return '/proc/self/fd/' .. scan_fd, scan_fd
+    end
     return ('%s/logana.%d.tmp'):format(fn.stdpath('run'), vim.uv.os_getpid())
 end
 
 -- puts the lines scan_batch collected in p.out into buf, replacing its lines or
 -- appending to them. ++enc/++bad keep the bytes as they are (++bin would set 'binary')
 local function read_scanned(buf, p, replace)
-    local tmp = scan_tmp()
-    local f = ffi.C.fopen(tmp, 'wb')
-    if f == nil then
-        -- can't write the run dir: slower, but the lines still get in
+    local tmp, fd = scan_tmp()
+    local written
+    if fd then
+        written = ffi.C.ftruncate(fd, 0) == 0 and tonumber(ffi.C.pwrite(fd, p.out, p.o, 0)) == p.o
+    else
+        local f = ffi.C.fopen(tmp, 'wb')
+        written = f ~= nil and ffi.C.fwrite(p.out, 1, p.o, f) == p.o
+        if f ~= nil then
+            ffi.C.fclose(f)
+        end
+    end
+    if not written then
+        -- slower, but the lines still get in
         local lines = vim.split(ffi.string(p.out, p.o - 1), '\n', { plain = true })
         p.o = 0
         api.nvim_buf_set_lines(buf, replace and 0 or -1, -1, false, lines)
         return
     end
-    ffi.C.fwrite(p.out, 1, p.o, f)
-    ffi.C.fclose(f)
     p.o = 0
     -- ':read' moves the cursor of the window it runs in, keep every window's view
     local views = {}
@@ -966,7 +986,12 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         job.finished = true
         st.job = nil
         if job.ffi then
-            os.remove(scan_tmp())
+            local tmp, fd = scan_tmp()
+            if fd then
+                ffi.C.ftruncate(fd, 0)
+            else
+                os.remove(tmp)
+            end
         end
         job.stop_spinner()
         if res.code == 2 then
