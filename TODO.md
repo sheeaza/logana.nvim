@@ -51,12 +51,18 @@ Numbers are for the `large` case of `tests/bench.lua` (740k result lines), see
   'binary'; one `:read` per 1 MB or 100 ms instead of per pump batch (~100 KB), and
   the temp file in memory: an anonymous memfd on Linux (`:read /proc/self/fd/<n>`),
   else a file in `stdpath('run')`. Rewriting it on a disk cost more than reading it.
-- [ ] Search one multi-GB file with several threads (klogg does this: 10k-line
+- [ ] ~~Search one multi-GB file with several threads (klogg does this: 10k-line
   chunks to N matcher threads, hits stored as `chunk start + offset` in a roaring
   bitmap, which merges in any order; lnav doesn't split a file). rg uses one thread per file
   (`-j 1` and `-j 16` both ~0.08 s, ~95% of one CPU on the 500 MB `xaa`), so a big
   file needs splitting into chunks / byte ranges, searched in parallel, with results
-  put back in file order and line numbers offset per chunk.
+  put back in file order and line numbers offset per chunk.~~: cancelled, not worth
+  the code. Measured on a synthetic 1 GB log (18M lines, 8 cores): rg alone on 8
+  chunk files `-j 8` is 2.58 -> 0.72 s for 4.78M matches, 0.41 -> 0.18 s for 361k,
+  but the refresh is neovim-bound when matches are many (level 1 4178 ms, ~2.8 s of
+  it parse + `:read`), and only ~290 ms when they are few. rg can't search a byte
+  range (pipes cost more than they gain, chunk files mean copying the file), line
+  numbers need a newline count up to each split, and N outputs need merging in order.
 - [x] Lazy level 2: compute [highlight] only for rows as they're drawn (as klogg
   does), caching per row, instead of all rows at the end of a refresh. neovim's regex
   isn't rg's syntax, so it would mean calling rg for the visible rows.
