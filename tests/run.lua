@@ -12,10 +12,13 @@ local L = require("logana")
 L.setup({})
 
 local orig_system = vim.system
-local rg_calls = 0
-vim.system = function(...)
+local rg_calls, level1_calls = 0, 0
+vim.system = function(args, ...)
     rg_calls = rg_calls + 1
-    return orig_system(...)
+    if vim.tbl_contains(args, "--null") then
+        level1_calls = level1_calls + 1
+    end
+    return orig_system(args, ...)
 end
 
 local LOG = {
@@ -61,8 +64,17 @@ local function result_lines()
     return api.nvim_buf_get_lines(result_buf(), 0, -1, false)
 end
 
+-- draws the screen, which asks for level 2 of the rows on it, and waits for it
+local function draw()
+    vim.cmd("redraw")
+    local hls = L._result_highlights[result_buf()]
+    vim.wait(5000, function() return hls.pending == 0 end, 1)
+end
+
 -- returns { "<level>:<row>:<text>[:<hl_idx>]", ... } for the result buffer
+-- (level 2 for the rows on screen)
 local function highlighted()
+    draw()
     local rb = result_buf()
     local hls = L._result_highlights[rb]
     local out = {}
@@ -157,11 +169,12 @@ end)
 test("[highlight] flag-only lines apply to every rule, without taking a color", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'" }, { "-e 'error'", "--smart-case", "-e 'Retry'", "-e 'retry'" })
-    eq(4, refresh(rule), "rg calls")   -- level 1 + 3 highlight rules
+    eq(1, refresh(rule), "rg calls")   -- level 1, level 2 runs when drawn
     eq({
         "match:1:resource", "hl:1:ERROR:1",
         "match:2:resource", "hl:2:retry:3",
     }, highlighted())
+    eq(4, rg_calls, "rg calls with level 2")   -- + 3 highlight rules
 end)
 
 test("a [highlight] rule's own flags override the shared ones", function()
@@ -261,8 +274,9 @@ test("only [highlight] changed: level 1 is skipped", function()
     set_rule(rule, { "-e 'resource'" })
     refresh(rule)
     set_rule(rule, { "-e 'resource'" }, { "-e 'busy'", "-e 'retry'" })
-    eq(2, refresh(rule), "one rg per highlight rule")
+    eq(0, refresh(rule), "rg calls")
     eq({ "match:1:resource", "hl:1:busy:1", "match:2:resource", "hl:2:retry:2" }, highlighted())
+    eq(2, rg_calls, "one rg per highlight rule when drawn")
 end)
 
 test("nothing changed: no rg runs", function()
@@ -277,7 +291,7 @@ test("[rg] changed: both levels rerun", function()
     set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
     refresh(rule)
     set_rule(rule, { "-e 'hardware'" }, { "-e 'busy'" })
-    eq(2, refresh(rule), "rg calls")
+    eq(1, refresh(rule), "rg calls")
     eq({ "match:1:hardware" }, highlighted())
 end)
 
@@ -304,10 +318,11 @@ end)
 test("opened_only = false: nothing changed reruns level 1, [highlight] change only level 2", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" }, false)
-    eq(2, refresh(rule), "first refresh")
-    eq(2, refresh(rule), "nothing changed: cwd files may have, rerun both")
+    eq(1, refresh(rule), "first refresh")
+    eq(1, refresh(rule), "nothing changed: cwd files may have, rerun level 1")
     set_rule(rule, { "-e 'resource'" }, { "-e 'retry'" }, false)
-    eq(1, refresh(rule), "only [highlight] changed")
+    eq(0, refresh(rule), "only [highlight] changed")
+    eq({ "match:1:resource", "match:2:resource", "hl:2:retry:1" }, highlighted())
 end)
 
 test("level 2 columns are right with multibyte text and ':' in lines", function()
@@ -375,8 +390,29 @@ test("level 1 streamed in batches lists every line once, with highlights on late
     local last = #lines - 2 -- 0-based row of the last match line
     local m = L._match_ranges(result_buf(), last)[1]
     eq("resource", lines[last + 1]:sub(m[1] + 1, m[2]))
+    draw()
+    eq(nil, hls.hl[last], "level 2 only for rows drawn")
+    local win = vim.fn.bufwinid(result_buf())
+    api.nvim_win_call(win, function() vim.cmd("normal! G") end)
+    draw()
     local h = hls.hl[last][1]
     eq("busy", lines[last + 1]:sub(h[1] + 1, h[2]))
+    eq(nil, hls.hl[30000], "nor for rows scrolled past")
+end)
+
+test("rows on screen get level 2 while level 1 is still loading", function()
+    local rule = setup_session()
+    write_big_log(60000)
+    set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+    L.refresh(rule)
+    vim.wait(5000, function() return result_buf() ~= -1 and api.nvim_buf_line_count(result_buf()) > 2 end, 1)
+    local loading = L._busy(rule)
+    draw()
+    local h = L._result_highlights[result_buf()].hl[1][1]
+    eq("busy", result_lines()[2]:sub(h[1] + 1, h[2]))
+    eq(true, loading, "drawn while loading")
+    vim.wait(5000, function() return not L._busy(rule) end, 1)
+    eq(h, L._result_highlights[result_buf()].hl[1][1], "kept when loading is done")
 end)
 
 test("[rg] changed while loading: the old run is dropped", function()
@@ -395,13 +431,14 @@ test("only [highlight] changed while loading: the run goes on and uses the new r
     local rule = setup_session()
     write_big_log(60000)
     set_rule(rule, { "-e 'resource'" }, { "-e 'nothing'" })
-    rg_calls = 0
+    level1_calls = 0
     L.refresh(rule)
     set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
     L.refresh(rule)
     vim.wait(5000, function() return not L._busy(rule) end, 1)
-    eq(2, rg_calls, "rg calls") -- one level 1 run, one level 2 rule
+    eq(1, level1_calls, "level 1 runs")
     eq(60000 + 2, #result_lines(), "line count")
+    draw()
     local h = L._result_highlights[result_buf()].hl[1][1]
     eq("busy", result_lines()[2]:sub(h[1] + 1, h[2]))
 end)
@@ -454,13 +491,14 @@ end)
 test("invalid [highlight] pattern warns and keeps level 1", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'" }, { "-e '(bad'", "-e 'busy'" })
-    local warned = false
+    local warned = 0
     local orig_notify = vim.notify
-    vim.notify = function(msg) warned = warned or msg:find("highlight rule") ~= nil end
+    vim.notify = function(msg) warned = warned + (msg:find("highlight rule") and 1 or 0) end
     refresh(rule)
+    local hl = highlighted()
     vim.notify = orig_notify
-    eq(true, warned, "warned")
-    eq({ "match:1:resource", "hl:1:busy:2", "match:2:resource" }, highlighted())
+    eq(1, warned, "warned")
+    eq({ "match:1:resource", "hl:1:busy:2", "match:2:resource" }, hl)
 end)
 
 test("loading keeps the cursor and view of a window on the result buffer", function()
@@ -475,6 +513,21 @@ test("loading keeps the cursor and view of a window on the result buffer", funct
     eq({ 5, 3 }, api.nvim_win_get_cursor(win), "cursor")
     eq(1, vim.fn.line("w0", win), "top line")
     eq(false, vim.bo[result_buf()].binary, "'binary' untouched")
+end)
+
+test("an invalid [highlight] pattern warns once, not on every scroll", function()
+    local rule = setup_session()
+    write_big_log(60000)
+    set_rule(rule, { "-e 'resource'" }, { "-e '(bad'" })
+    local warned = 0
+    local orig_notify = vim.notify
+    vim.notify = function(msg) warned = warned + (msg:find("highlight rule") and 1 or 0) end
+    refresh(rule)
+    draw()
+    api.nvim_win_call(vim.fn.bufwinid(result_buf()), function() vim.cmd("normal! G") end)
+    draw()
+    vim.notify = orig_notify
+    eq(1, warned, "warnings")
 end)
 
 -- every test runs with the ffi scanner (LuaJIT) and with the lua parser

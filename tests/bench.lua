@@ -56,14 +56,15 @@ end
 
 -- order of the columns, in the order they run
 -- level 1 is streamed: first = until the first lines are in the buffer,
--- parse/set_lines = summed over its batches, max_batch = longest the UI was blocked
+-- parse/set_lines = summed over its batches, max_batch = longest the UI was blocked.
+-- level 2 is lazy: hl = coloring the rows on one screen (headless: 24 lines), after it
 local PHASES = {
     { "first lines", "first" },
     { "parse rg output", "parse" },
     { "set lines", "set_lines" },
     { "max batch", "max_batch" },
     { "level 1", "level1" },
-    { "collect_highlights", "hl" },
+    { "highlight rows", "hl" },
     { "save_folds", "save_fold" },
     { "restore_folds", "rest_fold" },
     { "refresh", "total" },
@@ -72,6 +73,10 @@ local PHASES = {
 local function refresh(rule)
     L.refresh(rule)
     vim.wait(600000, function() return not L._busy(rule) end, 1)
+    -- drawing asks for level 2 of the rows on screen
+    vim.cmd("redraw")
+    local hls = L._result_highlights[vim.fn.bufnr("0.logana_result")]
+    vim.wait(600000, function() return not hls or hls.pending == 0 end, 1)
 end
 
 local function median(t)

@@ -57,9 +57,13 @@ Numbers are for the `large` case of `tests/bench.lua` (740k result lines), see
   (`-j 1` and `-j 16` both ~0.08 s, ~95% of one CPU on the 500 MB `xaa`), so a big
   file needs splitting into chunks / byte ranges, searched in parallel, with results
   put back in file order and line numbers offset per chunk.
-- [ ] Lazy level 2: compute [highlight] only for rows as they're drawn (as klogg
+- [x] Lazy level 2: compute [highlight] only for rows as they're drawn (as klogg
   does), caching per row, instead of all rows at the end of a refresh. neovim's regex
   isn't rg's syntax, so it would mean calling rg for the visible rows.
+  Done: on_line marks rows without ranges, on_end starts one async rg per rule over
+  their texts (read from the buffer), the windows redraw when they're in. Visible rows
+  get colors while level 1 still loads, and level 1 no longer collects the level 2
+  input: `large` total 5097 -> 1298 ms, RSS 1471 -> 224 MB, one screen ~25 ms.
 
 ## References
 

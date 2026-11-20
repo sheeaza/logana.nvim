@@ -43,8 +43,12 @@ runner adds the repo to `runtimepath` itself.
 - Wraps `vim.system` to count how many `rg` processes each refresh starts. The
   tests check this count to confirm which levels re-ran:
   - level 1 (`[rg]`) runs one `rg`;
-  - level 2 (`[highlight]`) runs one `rg` per `[highlight]` line that has a pattern;
+  - level 2 (`[highlight]`) runs one `rg` per `[highlight]` line that has a pattern,
+    when rows are drawn, not during the refresh;
   - `0` means nothing re-ran.
+- `highlighted()` runs `:redraw`, which calls the decoration provider even headless,
+  so rows on screen ask for level 2, and waits for it. Only rows on screen get it:
+  tests that check a late row scroll there first (`normal! G`).
 - For every test, wipes all buffers, `cd`s into a new temp dir, writes a small
   `a.log`, opens it, and opens `0.logana_rule` in a split. Rule and result files are
   created relative to cwd, so each test starts with nothing left over from the previous one.
@@ -120,8 +124,9 @@ Columns (the first three runs below predate streaming): `rg` level 1 rg run, `pa
 its output into the result lines (`prep` was a separate pass before the third run),
 `set_lines` writing them, `first` time until the first lines are in the buffer,
 `max_batch` the longest a single streamed batch blocked Neovim, `level1` until all
-level 1 lines are in, `hl` level 2, `save_fold`/`rest_fold` folds,
-`total` the whole refresh, `rss_MB` resident memory after the case.
+level 1 lines are in, `hl` level 2 (since it's lazy: coloring the rows on one
+screen after the refresh), `save_fold`/`rest_fold` folds,
+`total` the whole refresh (since level 2 is lazy, without it), `rss_MB` resident memory after the case.
 
 ### Results
 
@@ -215,4 +220,22 @@ ffi scanner:
 small        8984       7      12           6           3      103    25     132       30
 medium     131719      13     120          73          40      255    44     346      143
 large      738898      32     782         546         245     1561  3398    5097     1471
+```
+
+Level 2 lazy: a row gets its `[highlight]` colors when it's first drawn, from rg
+over just the rows on screen, so the refresh no longer runs it over all rows, and
+level 1 no longer collects the level 2 input (the line texts, ~100 MB on `large`).
+Same machine and synthetic log as above (median of 3). `hl` is now one screen (24
+rows), not included in `total`.
+
+```
+case    res_lines   first   parse   set_lines   max_batch   level1    hl   total   rss_MB
+lua parser:
+small        8984       7      19           6           3      108    11     109       18
+medium     131719       8     166          62          42      272    13     273       50
+large      738898      12    1023         346         235     1506    23    1507      219
+ffi scanner:
+small        8984       7       9           7           3      107    10     108       19
+medium     131719       9      77          78          42      240    13     241       55
+large      738898      12     526         523         252     1298    25    1298      224
 ```

@@ -21,7 +21,10 @@ local SPLIT_DIR = { top = 'below', bottom = 'above', left = 'right', right = 'le
 --     -- re-marks every live table while a large result streams in, which made it
 --     -- cost as much as the parsing
 --     match = { first = { [row] = i }, count = { [row] = n }, cols = { s1, e1, s2, e2, ... } },
---     hl    = { [row] = { {start_col, end_col, hl_idx}, ... } },   -- level 2, [highlight]
+--     -- level 2, [highlight], computed for rows as they're drawn, see highlight_rows.
+--     -- false: asked for, or no match. replaced when the rules change
+--     hl = { [row] = { {start_col, end_col, hl_idx}, ... } | false },
+--     hl_rules = <rg args lists>, warned = { [rule idx] = true }, pending = <requests running>,
 -- }
 -- highlighted lazily via decoration provider (ephemeral extmarks) instead of eagerly,
 -- since eagerly creating one extmark per match makes the first redraw of a large
@@ -34,7 +37,7 @@ local PRIORITY_MATCH = 4096
 local PRIORITY_HL = 4097
 
 -- per rule buffer refresh state, used to skip levels that don't need updating:
--- { match_sig, hl_sig, result_buf, result_dirty, attached_buf, hl_input, hl_map, file_rows,
+-- { match_sig, hl_sig, result_buf, result_dirty, attached_buf, file_rows,
 --   job (level 1 run in progress), gen, writing }
 local RULE_STATE = {}
 
@@ -67,6 +70,10 @@ local function draw_mark(bufnr, row, s, e, hl_group, priority)
     })
 end
 
+-- result buffer -> rows drawn without level 2 ranges yet, asked for in on_end
+local HL_WANT = {}
+local highlight_rows
+
 local function ensure_decoration_provider()
     if decoration_provider_ready then
         return
@@ -87,9 +94,33 @@ local function ensure_decoration_provider()
                     draw_mark(bufnr, row, cols[j], cols[j + 1], group, PRIORITY_MATCH)
                 end
             end
-            local names = M.config.hi_group_names
-            for _, hi in ipairs(hls.hl[row] or {}) do
-                draw_mark(bufnr, row, hi[1], hi[2], names[(hi[3] - 1) % #names + 1], PRIORITY_HL)
+            local marks = hls.hl[row]
+            if marks == nil and #hls.hl_rules > 0 then
+                hls.hl[row] = false -- asked for once
+                local want = HL_WANT[bufnr] or {}
+                HL_WANT[bufnr] = want
+                want[#want + 1] = row
+            elseif marks then
+                local names = M.config.hi_group_names
+                for _, hi in ipairs(marks) do
+                    draw_mark(bufnr, row, hi[1], hi[2], names[(hi[3] - 1) % #names + 1], PRIORITY_HL)
+                end
+            end
+        end,
+        on_end = function()
+            for bufnr, rows in pairs(HL_WANT) do
+                HL_WANT[bufnr] = nil
+                local hls = RESULT_HIGHLIGHTS[bufnr]
+                if hls then
+                    -- counted here, not when it runs, so tests waiting on it can't miss it
+                    hls.pending = hls.pending + 1
+                    -- outside the redraw, which shouldn't start processes.
+                    -- shortcut: one rg per rule per redraw with new rows, not throttled;
+                    -- batch them if holding a scroll key spawns too many
+                    vim.schedule(function()
+                        highlight_rows(bufnr, hls, rows, function() hls.pending = hls.pending - 1 end)
+                    end)
+                end
             end
         end,
     })
@@ -306,29 +337,24 @@ end
 --     n = <buffer rows written so far>,
 --     match = { first, count, cols },  -- as in RESULT_HIGHLIGHTS, 0-based rows
 --     file_rows = { { <1-based row of 'file: ' header>, <path> }, ... },
---     hl_chunks = { <text>\n<text>\n..., ... },  -- the matched line texts, stdin for
---                                               -- level 2, one string per batch
---     hl_row = { [i] = row }, hl_delta = { [i] = col - hl_input offset },
+--     k = <matched lines so far>,
 -- }
 local function new_parser()
-    return { n = 0, k = 0, bytes = 0, match = { first = {}, count = {}, cols = {} }, file_rows = {},
-        hl_chunks = {}, hl_row = {}, hl_delta = {},
+    return { n = 0, k = 0, match = { first = {}, count = {}, cols = {} }, file_rows = {},
         o = 0, cap = 0, plen = -1, pcap = 0 } -- scan_batch only: its output and current path
 end
 
 -- parses whole lines of level 1 output; returns the buffer lines they add
 local function parse_batch(p, data)
-    local out, m, texts, t = {}, 0, {}, 0
-    local n, k, bytes, cur = p.n, p.k, p.bytes, p.cur
-    local file_rows, hl_row, hl_delta = p.file_rows, p.hl_row, p.hl_delta
+    local out, m = {}, 0
+    local n, k, cur = p.n, p.k, p.cur
+    local file_rows = p.file_rows
     local first, count, cols = p.match.first, p.match.count, p.match.cols
     local c = #cols
 
     -- anchored on '\n' (data gets one in front): unanchored, a line that doesn't
-    -- match (a context line) is retried from each of its bytes, quadratic in its length.
-    -- positions instead of strings for '<lnum>: ' and the text: each string made costs
-    -- an intern and GC work, two less per line took ~30% off parsing
-    for path, s, raw, ts in ('\n' .. data):gmatch("\n([^%z\n]*)%z()(%d+: ()[^\n]*)") do
+    -- match (a context line) is retried from each of its bytes, quadratic in its length
+    for path, raw in ('\n' .. data):gmatch("\n([^%z\n]*)%z(%d+: [^\n]*)") do
         if path ~= cur then
             if cur then
                 m, n = m + 1, n + 1
@@ -341,29 +367,15 @@ local function parse_batch(p, data)
         end
         -- markers are only in the text part, so ranges are already buffer columns
         local line, nm = unmark(raw, cols, c)
-        m, n = m + 1, n + 1
+        m, n, k = m + 1, n + 1, k + 1
         out[m] = line
-        local off = ts - s
-        local text
         if nm > 0 then
             first[n - 1], count[n - 1] = c + 1, nm
             c = c + 2 * nm
-            text = line:sub(off + 1)
-        else
-            text = raw:sub(off + 1)
         end
-        k, t = k + 1, t + 1
-        texts[t] = text
-        hl_row[k] = n - 1
-        hl_delta[k] = off - bytes
-        bytes = bytes + #text + 1
     end
 
-    if t > 0 then
-        texts[t + 1] = '' -- every text ends with '\n'
-        p.hl_chunks[#p.hl_chunks + 1] = table.concat(texts, '\n')
-    end
-    p.n, p.k, p.bytes, p.cur = n, k, bytes, cur
+    p.n, p.k, p.cur = n, k, cur
     return out
 end
 
@@ -382,9 +394,6 @@ if has_ffi then
         pcall(ffi.cdef, decl)
     end
 end
-
--- batches are scanned synchronously, so every run shares the level 2 text buffer
-local scan_txt, scan_txt_cap = nil, 0
 
 local function copy_bytes(dst, o, src, s, e)
     for j = s, e - 1 do
@@ -406,17 +415,13 @@ local function scan_batch(p, data)
         ffi.copy(grown, p.out, p.o)
         p.out = grown
     end
-    if scan_txt_cap < n then
-        scan_txt_cap = n
-        scan_txt = ffi.new('uint8_t[?]', n)
-    end
-    local out, txt = p.out, scan_txt
+    local out = p.out
     local src = ffi.cast('const uint8_t *', data)
-    local row, k, bytes = p.n, p.k, p.bytes
-    local file_rows, hl_row, hl_delta = p.file_rows, p.hl_row, p.hl_delta
+    local row, k = p.n, p.k
+    local file_rows = p.file_rows
     local first, count, cols = p.match.first, p.match.count, p.match.cols
     local nc = #cols
-    local i, o, t = 0, p.o, 0
+    local i, o = 0, p.o
 
     while i < n do
         local ps = i
@@ -460,7 +465,6 @@ local function scan_batch(p, data)
 
                 local lo = o
                 o = copy_bytes(out, o, src, ls, i)
-                local off = o - lo
                 local c0, ms = nc, nil
                 local c = src[i]
                 while c ~= 10 do
@@ -473,8 +477,7 @@ local function scan_batch(p, data)
                             nc, ms = nc + 2, nil
                         end
                     else
-                        out[o], txt[t] = c, c
-                        o, t = o + 1, t + 1
+                        out[o], o = c, o + 1
                     end
                     i = i + 1
                     c = src[i]
@@ -482,11 +485,7 @@ local function scan_batch(p, data)
                 if nc > c0 then
                     first[row], count[row] = c0 + 1, (nc - c0) / 2
                 end
-                k = k + 1
-                hl_row[k], hl_delta[k] = row, off - bytes
-                bytes = bytes + o - lo - off + 1
-                out[o], txt[t] = 10, 10
-                o, t, row = o + 1, t + 1, row + 1
+                out[o], o, row, k = 10, o + 1, row + 1, k + 1
             end
         end
         while src[i] ~= 10 do
@@ -495,10 +494,7 @@ local function scan_batch(p, data)
         i = i + 1
     end
 
-    if t > 0 then
-        p.hl_chunks[#p.hl_chunks + 1] = ffi.string(txt, t)
-    end
-    p.n, p.k, p.bytes, p.o = row, k, bytes, o
+    p.n, p.k, p.o = row, k, o
 end
 
 -- the file read_scanned puts the lines in for ':read', returns its path and fd:
@@ -561,52 +557,91 @@ local function read_scanned(buf, p, replace)
     end
 end
 
--- level 2: run each [highlight] rule through rg over the result line texts (stdin),
--- so highlight patterns use the same regex syntax/options as [rg].
--- hl_map maps the i-th stdin line back to the result buffer, see collect_matches.
-local function collect_highlights(hl_rules, hl_input, hl_map)
-    local by_row = {}
-    if #hl_rules == 0 or #hl_map.row == 0 or #M.config.hi_group_names == 0 then
-        return by_row
+-- level 2, lazily: a row gets its [highlight] ranges when it's first drawn
+-- (on_line marks it false, on_end asks for it), so a refresh doesn't wait on every
+-- row, and visible rows are colored while level 1 still loads. each rule runs
+-- through rg over the rows' texts (stdin), so highlight patterns use the same regex
+-- syntax/options as [rg]. asynchronous: the ranges go to hls.hl, then the windows
+-- redraw. on_done is called either way.
+highlight_rows = function(bufnr, hls, rows, on_done)
+    local cache, rules = hls.hl, hls.hl_rules
+    if RESULT_HIGHLIGHTS[bufnr] ~= hls or #rules == 0 or #M.config.hi_group_names == 0 then
+        return on_done()
+    end
+    -- '<lnum>: <text>' rows; headers and blank lines have nothing to color
+    local texts, map_row, map_delta, pos = {}, {}, {}, 0
+    for _, row in ipairs(rows) do
+        cache[row] = cache[row] or false
+        local line = api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+        local ts = line and line:match('^%d+: ()')
+        if ts then
+            local i = #texts + 1
+            texts[i], map_row[i], map_delta[i] = line:sub(ts), row, ts - 1 - pos
+            pos = pos + #texts[i] + 1
+        end
+    end
+    if #texts == 0 then
+        return on_done()
+    end
+    texts[#texts + 1] = '' -- every text ends with '\n'
+    local input = table.concat(texts, '\n')
+    local t0 = now_ms()
+
+    local results, left = {}, #rules
+    local function apply()
+        on_done()
+        log.trace(string.format("highlight rows took: %d ms", now_ms() - t0))
+        if RESULT_HIGHLIGHTS[bufnr] ~= hls or hls.hl ~= cache then
+            return -- level 1 reran or the rules changed meanwhile
+        end
+        for i, res in ipairs(results) do
+            if not res or res.code == 2 then
+                -- once per rule, not on every scroll
+                if not hls.warned[i] then
+                    hls.warned[i] = true
+                    vim.notify(("[logana] highlight rule '%s' failed: %s"):format(table.concat(rules[i], ' '),
+                        res and res.stderr or "failed to execute ripgrep"), vim.log.levels.WARN)
+                end
+            elseif res.code == 0 then
+                for lnum, boff, text in res.stdout:gmatch("(%d+):(%d+):([^\n]*)") do
+                    local idx = tonumber(lnum)
+                    local row = map_row[idx]
+                    if row then
+                        local col = tonumber(boff) + map_delta[idx]
+                        local marks = cache[row] or {}
+                        cache[row] = marks
+                        marks[#marks + 1] = { col, col + #text, i }
+                    end
+                end
+            end
+        end
+        -- decoration provider marks are ephemeral; force visible windows to redraw them
+        pcall(api.nvim__redraw, { buf = bufnr, valid = false })
     end
 
-    -- rules are independent, start them all before waiting on any
-    local procs = {}
-    for i, rule_args in ipairs(hl_rules) do
+    for i, rule_args in ipairs(rules) do
         -- plain '<lnum>:<abs byte offset>:<match>' output instead of --json, since
         -- decoding json in lua dominates the cost on large result buffers
         local args = { M.config.rg.cmd, '--no-config', '--color', 'never', '--no-filename',
             '--line-number', '--byte-offset', '--only-matching' }
         vim.list_extend(args, rule_args)
         table.insert(args, '-')
-        local ok, proc = pcall(vim.system, args, { text = true, stdin = hl_input })
-        procs[i] = ok and proc or false
-    end
-
-    local rows, delta = hl_map.row, hl_map.delta
-    for i, proc in ipairs(procs) do
-        local res = proc and proc:wait()
-        if not res or res.code == 2 then
-            vim.notify(("[logana] highlight rule '%s' failed: %s"):format(
-                table.concat(hl_rules[i], ' '), res and res.stderr or "failed to execute ripgrep"), vim.log.levels.WARN)
-        elseif res.code == 0 then
-            for lnum, boff, text in res.stdout:gmatch("(%d+):(%d+):([^\n]*)") do
-                local idx = tonumber(lnum)
-                local row = rows[idx]
-                if row then
-                    local col = tonumber(boff) + delta[idx]
-                    local row_marks = by_row[row]
-                    if not row_marks then
-                        row_marks = {}
-                        by_row[row] = row_marks
-                    end
-                    row_marks[#row_marks + 1] = { col, col + #text, i }
-                end
+        -- exit callbacks only run once this loop is done, left can't reach 0 in it
+        local ok = pcall(vim.system, args, { text = true, stdin = input }, function(res)
+            results[i] = res
+            left = left - 1
+            if left == 0 then
+                vim.schedule(apply)
             end
+        end)
+        if not ok then
+            results[i] = false
+            left = left - 1
         end
     end
-
-    return by_row
+    if left == 0 then
+        vim.schedule(apply)
+    end
 end
 
 local function get_valid_opened_files()
@@ -862,14 +897,17 @@ local function show_result(rule_buf, result_buf)
     end
 end
 
--- level 2 and folds, once level 1 is done (or didn't need to run)
+-- starts over level 2 with these rules, rows get them as they're drawn
+local function reset_highlights(hls, ropts)
+    hls.hl, hls.hl_rules, hls.warned = {}, ropts.hl_rules, {}
+end
+
+-- new [highlight] rules and folds, once level 1 is done (or didn't need to run)
 local function finish_refresh(rule_buf, st, ropts, rerendered, fold_edited, t_all, on_done)
     show_result(rule_buf, st.result_buf)
 
     if st.hl_sig ~= ropts.hl_sig then
-        local t2 = now_ms()
-        RESULT_HIGHLIGHTS[st.result_buf].hl = collect_highlights(ropts.hl_rules, st.hl_input, st.hl_map)
-        log.trace(string.format("collect_highlights took: %d ms", now_ms() - t2))
+        reset_highlights(RESULT_HIGHLIGHTS[st.result_buf], ropts)
         st.hl_sig = ropts.hl_sig
         -- decoration provider marks are ephemeral; force visible windows to redraw them
         pcall(api.nvim__redraw, { buf = st.result_buf, valid = false })
@@ -1017,11 +1055,8 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         log.trace(string.format("max batch took: %d ms", job.max_ms))
         log.trace(string.format("level 1 took: %d ms", now_ms() - job.t0))
 
-        st.hl_input = table.concat(p.hl_chunks)
-        st.hl_map = { row = p.hl_row, delta = p.hl_delta }
         st.file_rows = p.file_rows
         st.match_sig = job.sig
-        st.hl_sig = nil
         finish_refresh(rule_buf, st, job.ropts, true, job.fold_edited, t_all, job.on_done)
     end
 
@@ -1047,8 +1082,12 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
             st.result_buf = result_buf
             st.result_dirty = false
             ensure_decoration_provider()
-            -- filled in as batches come; level 2 is computed when rg is done
-            RESULT_HIGHLIGHTS[result_buf] = { match = job.parser.match, hl = {} }
+            -- level 1 filled in as batches come, level 2 as rows are drawn, also while
+            -- loading. if only [highlight] changes meanwhile, finish_refresh resets it
+            local hls = { match = job.parser.match, pending = 0 }
+            reset_highlights(hls, job.ropts)
+            RESULT_HIGHLIGHTS[result_buf] = hls
+            st.hl_sig = job.ropts.hl_sig
             -- the old folds don't match the new lines, they're rebuilt when done
             for _, win in ipairs(fn.win_findbuf(result_buf)) do
                 api.nvim_win_call(win, function() vim.cmd('silent! normal! zE') end)
@@ -1415,7 +1454,7 @@ local function setup_keybinding()
 end
 
 -- same as pressing <Enter> in rule_buf. results load asynchronously; on_done is
--- called once they and their highlights and folds are applied (not when the
+-- called once they and their folds are applied, level 2 comes as rows are drawn (not when the
 -- refresh fails, finds no match, or is superseded by another one)
 function M.refresh(rule_buf, on_done)
     return refresh_from_rule(rule_buf, on_done)
