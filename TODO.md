@@ -19,7 +19,7 @@ Numbers are for the `large` case of `tests/bench.lua` (740k result lines), see
   `collect_highlights` is ~100 ms on `large`, but the bench's [highlight] rules match
   few lines; it runs synchronously (blocks for its whole time) and grows with the
   number of highlight matches, so revisit if broad [highlight] rules get slow.
-- [ ] Prototype loading level 1 through neovim's C file reader instead of Lua: rg
+- [x] Prototype loading level 1 through neovim's C file reader instead of Lua: rg
   output to a temp file, read into the result buffer, match columns from rg byte
   offsets (as level 2 does). Lua parsing is ~1.56 s of the 2.05 s on `large`, mostly
   making the line strings. Open: rg `--heading` prints the path without our `file: `
@@ -43,6 +43,13 @@ Numbers are for the `large` case of `tests/bench.lua` (740k result lines), see
   multi-threaded. To handle: `file: ` prefix on headers (write it while copying),
   force no context (`-A 0 -B 0` last), `:read` moves the cursor of windows showing
   the buffer, and keep the current Lua parser as a fallback when there's no LuaJIT.
+  Done, measured on a synthetic 400 MB log on another machine (`large` level 1
+  3.9 -> 1.6 s, see `tests/README.md`). Differences from the plan: the rg output
+  keeps `--null` and no `--heading` (headers come from comparing each line's path
+  with the previous one), so context lines are skipped as before and no `-A 0 -B 0`
+  is needed; `:read ++ff=unix ++enc=utf-8 ++bad=keep` instead of `++bin`, which set
+  'binary'; one `:read` per 1 MB or 100 ms instead of per pump batch (~100 KB), and
+  the temp file in `stdpath('run')`: rewriting it on a disk cost more than reading it.
 - [ ] Search one multi-GB file with several threads (klogg does this: 10k-line
   chunks to N matcher threads, hits stored as `chunk start + offset` in a roaring
   bitmap, which merges in any order; lnav doesn't split a file). rg uses one thread per file

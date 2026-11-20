@@ -463,15 +463,35 @@ test("invalid [highlight] pattern warns and keeps level 1", function()
     eq({ "match:1:resource", "hl:1:busy:2", "match:2:resource" }, highlighted())
 end)
 
-local failed = 0
-for _, t in ipairs(tests) do
-    local ok, err = pcall(t.f)
-    if ok then
-        print("ok   " .. t.name)
-    else
-        failed = failed + 1
-        print("FAIL " .. t.name .. "\n  " .. tostring(err))
+test("loading keeps the cursor and view of a window on the result buffer", function()
+    local rule = setup_session()
+    write_big_log(60000)
+    set_rule(rule, { "-e 'resource'" })
+    refresh(rule)
+    local win = vim.fn.bufwinid(result_buf())
+    api.nvim_win_set_cursor(win, { 5, 3 })
+    set_rule(rule, { "-e 'resource'", "-e 'nothing'" })
+    refresh(rule)
+    eq({ 5, 3 }, api.nvim_win_get_cursor(win), "cursor")
+    eq(1, vim.fn.line("w0", win), "top line")
+    eq(false, vim.bo[result_buf()].binary, "'binary' untouched")
+end)
+
+-- every test runs with the ffi scanner (LuaJIT) and with the lua parser
+local failed, total = 0, 0
+for _, ffi_mode in ipairs(L._ffi and { true, false } or { false }) do
+    L._ffi = ffi_mode
+    for _, t in ipairs(tests) do
+        total = total + 1
+        local ok, err = pcall(t.f)
+        local name = (ffi_mode and "[ffi] " or "[lua] ") .. t.name
+        if ok then
+            print("ok   " .. name)
+        else
+            failed = failed + 1
+            print("FAIL " .. name .. "\n  " .. tostring(err))
+        end
     end
 end
-print(("%d/%d passed"):format(#tests - failed, #tests))
+print(("%d/%d passed"):format(total - failed, total))
 vim.cmd(failed == 0 and "qa!" or "cquit!")

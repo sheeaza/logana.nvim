@@ -50,6 +50,8 @@ runner adds the repo to `runtimepath` itself.
   created relative to cwd, so each test starts with nothing left over from the previous one.
 - Turns on `filetype` detection, which `-u NONE` leaves off; rule buffers are set up
   by their `FileType` autocmd.
+- Runs every test twice: with the LuaJIT ffi scanner for level 1 (`[ffi]`) and
+  with the Lua parser used without LuaJIT (`[lua]`).
 - Reads the computed highlights from `require("logana")._result_highlights` and
   turns them into readable strings:
 
@@ -192,4 +194,25 @@ case    res_lines   first   parse   set_lines   max_batch   level1    hl   total
 small         887       6       1           0           0       84     8      93       15
 medium     132858      10     247          36          15      338    38     393      198
 large      740954      27    1562         193          78     1884    98    2048      911
+```
+
+Level 1 scanned with a LuaJIT ffi byte loop, the result lines put in the buffer with
+`:read` from a temp file, without a Lua string per line. Measured on another
+machine with a synthetic 400 MB log of the same shape (2.64M lines, `large` ~739k
+matches), against the Lua parser on that same machine (median of 3). `hl` is high
+on both because the synthetic log's `start is`/`stop is` rules match every
+`CLIENT_MGR` line; its gap between the two is GC noise (with the same refresh run
+back to back in one process, both took 2.3-2.7 s). `set_lines` is the `:read`s,
+~240 ms of it the first one, which clears the previous result.
+
+```
+case    res_lines   first   parse   set_lines   max_batch   level1    hl   total   rss_MB
+lua parser:
+small        8984       7      29           6           5      105    25     134       25
+medium     131719      50     358          57          69      469    41     554      176
+large      738898      45    3329         338         235     3947  2328    6380     1445
+ffi scanner:
+small        8984       7      12           6           3      103    25     132       30
+medium     131719      13     120          73          40      255    44     346      143
+large      738898      32     782         546         245     1561  3398    5097     1471
 ```

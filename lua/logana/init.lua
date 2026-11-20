@@ -312,7 +312,8 @@ end
 -- }
 local function new_parser()
     return { n = 0, k = 0, bytes = 0, match = { first = {}, count = {}, cols = {} }, file_rows = {},
-        hl_chunks = {}, hl_row = {}, hl_delta = {} }
+        hl_chunks = {}, hl_row = {}, hl_delta = {},
+        o = 0, cap = 0, plen = -1, pcap = 0 } -- scan_batch only: its output and current path
 end
 
 -- parses whole lines of level 1 output; returns the buffer lines they add
@@ -364,6 +365,180 @@ local function parse_batch(p, data)
     end
     p.n, p.k, p.bytes, p.cur = n, k, bytes, cur
     return out
+end
+
+-- with LuaJIT, level 1 is scanned byte by byte through the ffi instead, and the
+-- result lines go to the buffer with ':read' from a temp file, made in C: no lua
+-- string per line, which is most of parse_batch's cost. ~3x faster level 1.
+local has_ffi, ffi = pcall(require, 'ffi')
+M._ffi = has_ffi -- tests turn it off to cover the lua parser
+if has_ffi then
+    -- each on its own, another plugin may have declared some already
+    for _, decl in ipairs({ 'void *fopen(const char *path, const char *mode);',
+        'size_t fwrite(const void *buf, size_t size, size_t n, void *f);', 'int fclose(void *f);' }) do
+        pcall(ffi.cdef, decl)
+    end
+end
+
+-- batches are scanned synchronously, so every run shares the level 2 text buffer
+local scan_txt, scan_txt_cap = nil, 0
+
+local function copy_bytes(dst, o, src, s, e)
+    for j = s, e - 1 do
+        dst[o] = src[j]
+        o = o + 1
+    end
+    return o
+end
+
+-- same as parse_batch, but appends the buffer lines to p.out, p.o bytes so far,
+-- for read_scanned. headers are found by comparing each line's path with the
+-- previous one, kept in p.path
+local function scan_batch(p, data)
+    local n = #data
+    -- a line grows by at most the 'file: ' header and blank line before it
+    if p.cap < p.o + 3 * n + 16 then
+        p.cap = 2 * (p.o + 3 * n + 16)
+        local grown = ffi.new('uint8_t[?]', p.cap)
+        ffi.copy(grown, p.out, p.o)
+        p.out = grown
+    end
+    if scan_txt_cap < n then
+        scan_txt_cap = n
+        scan_txt = ffi.new('uint8_t[?]', n)
+    end
+    local out, txt = p.out, scan_txt
+    local src = ffi.cast('const uint8_t *', data)
+    local row, k, bytes = p.n, p.k, p.bytes
+    local file_rows, hl_row, hl_delta = p.file_rows, p.hl_row, p.hl_delta
+    local first, count, cols = p.match.first, p.match.count, p.match.cols
+    local nc = #cols
+    local i, o, t = 0, p.o, 0
+
+    while i < n do
+        local ps = i
+        while src[i] ~= 0 and src[i] ~= 10 do
+            i = i + 1
+        end
+        -- '<path>\0<lnum>: <text>'. context lines ('<lnum>-') and the '--' between
+        -- them are skipped
+        if src[i] == 0 then
+            local plen = i - ps
+            i = i + 1
+            local ls = i
+            while src[i] >= 48 and src[i] <= 57 do
+                i = i + 1
+            end
+            if i > ls and src[i] == 58 and src[i + 1] == 32 then
+                i = i + 2
+                local same = plen == p.plen
+                for j = 0, same and plen - 1 or -1 do
+                    if src[ps + j] ~= p.path[j] then
+                        same = false
+                        break
+                    end
+                end
+                if not same then
+                    if p.cur then
+                        out[o], o, row = 10, o + 1, row + 1
+                    end
+                    o = copy_bytes(out, o, ffi.cast('const uint8_t *', 'file: '), 0, 6)
+                    o = copy_bytes(out, o, src, ps, ps + plen)
+                    out[o], o, row = 10, o + 1, row + 1
+                    if plen > p.pcap then
+                        p.pcap = 2 * plen
+                        p.path = ffi.new('uint8_t[?]', p.pcap)
+                    end
+                    copy_bytes(p.path, 0, src, ps, ps + plen)
+                    p.plen = plen
+                    p.cur = ffi.string(src + ps, plen)
+                    file_rows[#file_rows + 1] = { row, p.cur }
+                end
+
+                local lo = o
+                o = copy_bytes(out, o, src, ls, i)
+                local off = o - lo
+                local c0, ms = nc, nil
+                local c = src[i]
+                while c ~= 10 do
+                    -- markers are dropped; a stray one in a log line only shifts its own columns
+                    if c == 30 then
+                        ms = o - lo
+                    elseif c == 31 then
+                        if ms then
+                            cols[nc + 1], cols[nc + 2] = ms, o - lo
+                            nc, ms = nc + 2, nil
+                        end
+                    else
+                        out[o], txt[t] = c, c
+                        o, t = o + 1, t + 1
+                    end
+                    i = i + 1
+                    c = src[i]
+                end
+                if nc > c0 then
+                    first[row], count[row] = c0 + 1, (nc - c0) / 2
+                end
+                k = k + 1
+                hl_row[k], hl_delta[k] = row, off - bytes
+                bytes = bytes + o - lo - off + 1
+                out[o], txt[t] = 10, 10
+                o, t, row = o + 1, t + 1, row + 1
+            end
+        end
+        while src[i] ~= 10 do
+            i = i + 1
+        end
+        i = i + 1
+    end
+
+    if t > 0 then
+        p.hl_chunks[#p.hl_chunks + 1] = ffi.string(txt, t)
+    end
+    p.n, p.k, p.bytes, p.o = row, k, bytes, o
+end
+
+-- in the run dir, a tmpfs on most linux systems: on a disk, rewriting the file
+-- before each ':read' cost more than the read
+local function scan_tmp()
+    return ('%s/logana.%d.tmp'):format(fn.stdpath('run'), vim.uv.os_getpid())
+end
+
+-- puts the lines scan_batch collected in p.out into buf, replacing its lines or
+-- appending to them. ++enc/++bad keep the bytes as they are (++bin would set 'binary')
+local function read_scanned(buf, p, replace)
+    local tmp = scan_tmp()
+    local f = ffi.C.fopen(tmp, 'wb')
+    if f == nil then
+        -- can't write the run dir: slower, but the lines still get in
+        local lines = vim.split(ffi.string(p.out, p.o - 1), '\n', { plain = true })
+        p.o = 0
+        api.nvim_buf_set_lines(buf, replace and 0 or -1, -1, false, lines)
+        return
+    end
+    ffi.C.fwrite(p.out, 1, p.o, f)
+    ffi.C.fclose(f)
+    p.o = 0
+    -- ':read' moves the cursor of the window it runs in, keep every window's view
+    local views = {}
+    for _, win in ipairs(fn.win_findbuf(buf)) do
+        views[win] = api.nvim_win_call(win, fn.winsaveview)
+    end
+    local cmd = 'silent noautocmd keepalt keepjumps %sread ++ff=unix ++enc=utf-8 ++bad=keep '
+        .. fn.fnameescape(tmp)
+    api.nvim_buf_call(buf, function()
+        if replace then
+            api.nvim_buf_set_lines(buf, 0, -1, false, {})
+            vim.cmd(cmd:format('0'))
+            -- the empty line an empty buffer still has
+            api.nvim_buf_set_lines(buf, -2, -1, false, {})
+        else
+            vim.cmd(cmd:format('$'))
+        end
+    end)
+    for win, view in pairs(views) do
+        api.nvim_win_call(win, function() fn.winrestview(view) end)
+    end
 end
 
 -- level 2: run each [highlight] rule through rg over the result line texts (stdin),
@@ -766,6 +941,9 @@ end
 -- many bytes, each in its own main loop callback, so neovim stays responsive and
 -- the first lines show while rg is still running
 local BATCH_BYTES = 1024 * 1024
+-- the ffi scanner's lines go to the buffer once per BATCH_BYTES or this many ms:
+-- each ':read' costs a temp file write, and the pump batches are only ~100 KB
+local FLUSH_MS = 100
 
 -- level 1, streamed: the first batch replaces the result buffer, later ones append.
 -- with no match the buffer keeps its old content. job.ropts may be swapped by a
@@ -776,8 +954,8 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
     local gen = st.gen
     local job = {
         sig = ropts.match_sig, ropts = ropts, fold_edited = fold_edited, on_done = on_done,
-        chunks = {}, head = 1, tail = 0, rest = '', parser = new_parser(),
-        t0 = now_ms(), parse_ms = 0, set_ms = 0, max_ms = 0,
+        chunks = {}, head = 1, tail = 0, rest = '', parser = new_parser(), ffi = M._ffi,
+        t0 = now_ms(), flushed = 0, parse_ms = 0, set_ms = 0, max_ms = 0,
     }
     st.job = job
     job.stop_spinner = start_spinner(rule_buf, job)
@@ -785,7 +963,11 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
     st.match_sig = nil
 
     local function done(res)
+        job.finished = true
         st.job = nil
+        if job.ffi then
+            os.remove(scan_tmp())
+        end
         job.stop_spinner()
         if res.code == 2 then
             vim.notify(("[logana] ripgrep error for: %s"):format(res.stderr or "exit code 2"), vim.log.levels.WARN)
@@ -818,6 +1000,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         finish_refresh(rule_buf, st, job.ropts, true, job.fold_edited, t_all, job.on_done)
     end
 
+    -- lines: a table from parse_batch, or nil for what scan_batch collected
     local function write(lines)
         st.writing = true
         if not job.started then
@@ -831,7 +1014,11 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
             -- fn.bufadd/fn.bufload bypass create_normal_buffer's swapfile=false
             pcall(api.nvim_set_option_value, "swapfile", false, { buf = result_buf })
             attach_result(st, result_buf)
-            api.nvim_buf_set_lines(result_buf, 0, -1, false, lines)
+            if job.ffi then
+                read_scanned(result_buf, job.parser, true)
+            else
+                api.nvim_buf_set_lines(result_buf, 0, -1, false, lines)
+            end
             st.result_buf = result_buf
             st.result_dirty = false
             ensure_decoration_provider()
@@ -842,6 +1029,8 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
                 api.nvim_win_call(win, function() vim.cmd('silent! normal! zE') end)
             end
             show_result(rule_buf, result_buf)
+        elseif job.ffi then
+            read_scanned(result_buf, job.parser, false)
         else
             api.nvim_buf_set_lines(result_buf, -1, -1, false, lines)
         end
@@ -858,7 +1047,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
 
     pump = function()
         job.pumping = false
-        if st.gen ~= gen then
+        if st.gen ~= gen or job.finished then
             return
         end
         if not api.nvim_buf_is_valid(result_buf) then
@@ -886,10 +1075,22 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         else
             job.rest, data = data, ''
         end
-        local lines = parse_batch(job.parser, data)
-        local t1 = now_ms()
-        if #lines > 0 then
-            write(lines)
+        local t1
+        if job.ffi then
+            local p = job.parser
+            scan_batch(p, data)
+            t1 = now_ms()
+            if p.o > 0 and (p.o >= BATCH_BYTES or not job.started or t1 - job.flushed >= FLUSH_MS
+                    or (job.exit and job.head > job.tail)) then
+                write()
+                job.flushed = t1
+            end
+        else
+            local lines = parse_batch(job.parser, data)
+            t1 = now_ms()
+            if #lines > 0 then
+                write(lines)
+            end
         end
         local t2 = now_ms()
         job.parse_ms = job.parse_ms + t1 - t
@@ -900,6 +1101,13 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
             schedule_pump()
         elseif job.exit then
             done(job.exit)
+        elseif job.parser.o > 0 and not job.flush_timer then
+            -- rg paused, show what's collected without waiting for more
+            job.flush_timer = true
+            vim.defer_fn(function()
+                job.flush_timer = false
+                schedule_pump()
+            end, FLUSH_MS)
         end
     end
 
