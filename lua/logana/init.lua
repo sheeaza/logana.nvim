@@ -8,12 +8,44 @@ local NS_MATCH = api.nvim_create_namespace("logana.match")
 
 local SPLIT_DIR = { top = 'below', bottom = 'above', left = 'right', right = 'left' }
 
--- match ranges per result buffer, keyed by 0-based row: { [row] = { {start_col, end_col}, ... } }
+-- highlight ranges per result buffer, keyed by 0-based row:
+-- {
+--     match = { [row] = { {start_col, end_col}, ... } },           -- level 1, [rg]
+--     hl    = { [row] = { {start_col, end_col, hl_idx}, ... } },   -- level 2, [highlight]
+-- }
 -- highlighted lazily via decoration provider (ephemeral extmarks) instead of eagerly,
 -- since eagerly creating one extmark per match makes the first redraw of a large
 -- result buffer (hundreds of thousands of matches) take seconds.
 local RESULT_HIGHLIGHTS = {}
 local decoration_provider_ready = false
+
+-- level 2 draws above level 1, so a [highlight] color wins where both overlap
+local PRIORITY_MATCH = 4096
+local PRIORITY_HL = 4097
+
+-- per rule buffer refresh state, used to skip levels that don't need updating:
+-- { match_sig, hl_sig, result_buf, result_dirty, attached_buf, hl_input, hl_rows }
+local RULE_STATE = {}
+
+-- exposed for tests only
+M._result_highlights = RESULT_HIGHLIGHTS
+
+local function draw_marks(bufnr, row, marks, priority)
+    if not marks then
+        return
+    end
+    local names = M.config.hi_group_names
+    for _, hi in ipairs(marks) do
+        local name = hi[3] and names[(hi[3] - 1) % #names + 1] or M.config.hi_match_group
+        api.nvim_buf_set_extmark(bufnr, NS_MATCH, row, hi[1], {
+            end_row = row,
+            end_col = hi[2],
+            hl_group = name,
+            priority = priority,
+            ephemeral = true,
+        })
+    end
+end
 
 local function ensure_decoration_provider()
     if decoration_provider_ready then
@@ -26,18 +58,9 @@ local function ensure_decoration_provider()
             return RESULT_HIGHLIGHTS[bufnr] ~= nil
         end,
         on_line = function(_, _, bufnr, row)
-            local marks = RESULT_HIGHLIGHTS[bufnr] and RESULT_HIGHLIGHTS[bufnr][row]
-            if not marks then
-                return
-            end
-            for _, hi in ipairs(marks) do
-                api.nvim_buf_set_extmark(bufnr, NS_MATCH, row, hi[1], {
-                    end_row = row,
-                    end_col = hi[2],
-                    hl_group = M.config.hi_group_name,
-                    ephemeral = true,
-                })
-            end
+            local hls = RESULT_HIGHLIGHTS[bufnr]
+            draw_marks(bufnr, row, hls.match[row], PRIORITY_MATCH)
+            draw_marks(bufnr, row, hls.hl[row], PRIORITY_HL)
         end,
     })
 end
@@ -157,6 +180,14 @@ local function parse_rule_buf(rule_buf)
         end
     end
 
+    -- each [highlight] line is its own rg args list, and gets its own color
+    rule.hl_rules = {}
+    if rule.highlight then
+        for _, line in ipairs(rule.highlight.lines) do
+            table.insert(rule.hl_rules, split_with_quotes(line))
+        end
+    end
+
     if rule.file and rule.file.lines then
         for _, line in ipairs(rule.file.lines) do
             local kb, vb = line:match("^%s*(%S-)%s*=%s*(%S-)%s*$")
@@ -245,9 +276,60 @@ local function collect_matches(ropts)
     return results
 end
 
+-- level 2: run each [highlight] rule through rg over the result line texts (stdin),
+-- so highlight patterns use the same regex syntax/options as [rg].
+-- hl_rows[i] = { row, col_offset, input_byte_offset } maps the i-th stdin line back to
+-- the result buffer.
+local function collect_highlights(hl_rules, hl_input, hl_rows)
+    local by_row = {}
+    if #hl_rules == 0 or #hl_rows == 0 or #M.config.hi_group_names == 0 then
+        return by_row
+    end
+
+    -- rules are independent, start them all before waiting on any
+    local procs = {}
+    for i, rule_args in ipairs(hl_rules) do
+        -- plain '<lnum>:<abs byte offset>:<match>' output instead of --json, since
+        -- decoding json in lua dominates the cost on large result buffers
+        local args = { M.config.rg.cmd, '--no-config', '--color', 'never', '--no-filename',
+            '--line-number', '--byte-offset', '--only-matching' }
+        vim.list_extend(args, rule_args)
+        table.insert(args, '-')
+        local ok, proc = pcall(vim.system, args, { text = true, stdin = hl_input })
+        procs[i] = ok and proc or false
+    end
+
+    for i, proc in ipairs(procs) do
+        local res = proc and proc:wait()
+        if not res or res.code == 2 then
+            vim.notify(("[logana] highlight rule '%s' failed: %s"):format(
+                table.concat(hl_rules[i], ' '), res and res.stderr or "failed to execute ripgrep"), vim.log.levels.WARN)
+        elseif res.code == 0 then
+            for lnum, boff, text in res.stdout:gmatch("(%d+):(%d+):([^\n]*)") do
+                local pos = hl_rows[tonumber(lnum)]
+                if pos then
+                    local row = pos[1]
+                    local col = tonumber(boff) - pos[3] + pos[2]
+                    local row_marks = by_row[row]
+                    if not row_marks then
+                        row_marks = {}
+                        by_row[row] = row_marks
+                    end
+                    row_marks[#row_marks + 1] = { col, col + #text, i }
+                end
+            end
+        end
+    end
+
+    return by_row
+end
+
 local function render_results(result_buf, matches, rule_win)
     local lines = {}
     local highlights_by_row = {}
+    local hl_texts = {}
+    local hl_rows = {}
+    local hl_bytes = 0
     local cur_line_num = 0
 
     -- result buffers are fully regenerated on every refresh; there's nothing
@@ -270,6 +352,9 @@ local function render_results(result_buf, matches, rule_win)
 
             local row = cur_line_num - 1
             local off = #prefix
+            table.insert(hl_texts, line.line_text)
+            table.insert(hl_rows, { row, off, hl_bytes })
+            hl_bytes = hl_bytes + #line.line_text + 1
             if #line.matches > 0 then
                 local row_marks = {}
                 for _, hi in ipairs(line.matches) do
@@ -289,20 +374,22 @@ local function render_results(result_buf, matches, rule_win)
 
     local t2 = vim.uv.now()
     ensure_decoration_provider()
-    RESULT_HIGHLIGHTS[result_buf] = highlights_by_row
+    -- level 2 highlights are recomputed against the new lines by the caller
+    RESULT_HIGHLIGHTS[result_buf] = { match = highlights_by_row, hl = {} }
     log.trace(string.format("render_results hi took: %d ms", vim.uv.now() - t2))
 
-    if fn.bufwinid(result_buf) ~= -1 then
-        return
-    end
-
-    if M.config.result_win.behavior == 'hide_at_first' then
-        result_open_win(result_buf, rule_win)
-    elseif M.config.result_win.behavior == 'override' then
-        if rule_win ~= -1 and api.nvim_win_is_valid(rule_win) then
-            api.nvim_win_set_buf(rule_win, result_buf)
+    if fn.bufwinid(result_buf) == -1 then
+        if M.config.result_win.behavior == 'hide_at_first' then
+            result_open_win(result_buf, rule_win)
+        elseif M.config.result_win.behavior == 'override' then
+            if rule_win ~= -1 and api.nvim_win_is_valid(rule_win) then
+                api.nvim_win_set_buf(rule_win, result_buf)
+            end
         end
     end
+
+    local hl_input = #hl_texts > 0 and table.concat(hl_texts, '\n') .. '\n' or ''
+    return hl_input, hl_rows
 end
 
 local function get_valid_opened_files()
@@ -349,22 +436,33 @@ local function get_runtime_opts(rule_buf)
         vim.list_extend(args, files)
     end
 
-    return { args_common = args }
+    -- level 1 needs a rerun when the rg args change, or (for opened files) when
+    -- a searched file changes on disk; with a directory search there's no cheap
+    -- way to detect file changes, use ':Logana refresh' to force it
+    local sig = { table.concat(args, '\0') }
+    if rule.file and rule.file.opened_only then
+        for _, f in ipairs(args) do
+            local st = vim.uv.fs_stat(f)
+            if st and st.type == 'file' then
+                table.insert(sig, ('%s:%d:%d.%d'):format(f, st.size, st.mtime.sec, st.mtime.nsec))
+            end
+        end
+    end
+
+    local hl_sig = {}
+    for _, rule_args in ipairs(rule.hl_rules) do
+        table.insert(hl_sig, table.concat(rule_args, '\0'))
+    end
+
+    return {
+        args_common = args,
+        match_sig = table.concat(sig, '\n'),
+        hl_rules = rule.hl_rules,
+        hl_sig = table.concat(hl_sig, '\n'),
+    }
 end
 
-local function refresh_from_rule(rule_buf)
-    local ropts, err = get_runtime_opts(rule_buf)
-    if err then
-        return nil, "get runtime opts failed"
-    end
-
-    local t0 = vim.uv.now()
-    local matches, merr = collect_matches(ropts)
-    if merr then
-        return nil, "collect_matches failed"
-    end
-    log.trace(string.format("collect_matches took: %d ms", vim.uv.now() - t0))
-
+local function get_result_buf(rule_buf)
     local rule_abs_path = api.nvim_buf_get_name(rule_buf)
     local rule_prefix = fn.fnamemodify(rule_abs_path, ":t:r")
     local rule_dir = fn.fnamemodify(rule_abs_path, ':p:h')
@@ -380,10 +478,73 @@ local function refresh_from_rule(rule_buf)
             result_buf = create_normal_buffer(rule_prefix .. '.' .. M.config.naming.result, M.config.naming.result)
         end
     end
+    return result_buf
+end
 
-    local t1 = vim.uv.now()
-    render_results(result_buf, matches, fn.bufwinid(rule_buf))
-    log.trace(string.format("render_results took: %d ms", vim.uv.now() - t1))
+-- level 1 ([rg] -> result lines) only reruns when its inputs changed, or the result
+-- buffer is gone / was edited since we rendered it. level 2 ([highlight]) reruns
+-- whenever level 1 did, or when the [highlight] rules changed.
+local function refresh_from_rule(rule_buf, force)
+    local ropts, err = get_runtime_opts(rule_buf)
+    if err then
+        return nil, "get runtime opts failed"
+    end
+
+    local st = RULE_STATE[rule_buf] or {}
+    RULE_STATE[rule_buf] = st
+
+    local result_intact = st.result_buf and api.nvim_buf_is_valid(st.result_buf)
+        and not st.result_dirty and RESULT_HIGHLIGHTS[st.result_buf] ~= nil
+
+    if force or not result_intact or st.match_sig ~= ropts.match_sig then
+        local t0 = vim.uv.now()
+        local matches, merr = collect_matches(ropts)
+        if merr then
+            return nil, "collect_matches failed"
+        end
+        log.trace(string.format("collect_matches took: %d ms", vim.uv.now() - t0))
+
+        local result_buf = get_result_buf(rule_buf)
+        local t1 = vim.uv.now()
+        st.hl_input, st.hl_rows = render_results(result_buf, matches, fn.bufwinid(rule_buf))
+        log.trace(string.format("render_results took: %d ms", vim.uv.now() - t1))
+
+        -- track user edits of the result buffer (changedtick can't be used, ':w'
+        -- bumps it too). on_lines also fires for our own set_lines in
+        -- render_results above, hence resetting result_dirty after it.
+        if st.attached_buf ~= result_buf then
+            st.attached_buf = result_buf
+            api.nvim_buf_attach(result_buf, false, {
+                on_lines = function()
+                    if st.attached_buf ~= result_buf then
+                        return true -- detach, the rule now renders elsewhere
+                    end
+                    st.result_dirty = true
+                end,
+                on_reload = function()
+                    st.result_dirty = true
+                end,
+                on_detach = function()
+                    if st.attached_buf == result_buf then
+                        st.attached_buf = nil
+                    end
+                end,
+            })
+        end
+        st.result_buf = result_buf
+        st.result_dirty = false
+        st.match_sig = ropts.match_sig
+        st.hl_sig = nil
+    end
+
+    if st.hl_sig ~= ropts.hl_sig then
+        local t2 = vim.uv.now()
+        RESULT_HIGHLIGHTS[st.result_buf].hl = collect_highlights(ropts.hl_rules, st.hl_input, st.hl_rows)
+        log.trace(string.format("collect_highlights took: %d ms", vim.uv.now() - t2))
+        st.hl_sig = ropts.hl_sig
+        -- decoration provider marks are ephemeral; force visible windows to redraw them
+        pcall(api.nvim__redraw, { buf = st.result_buf, valid = false })
+    end
 end
 
 local function initialize_rule_buffer(rule_buf)
@@ -449,10 +610,19 @@ local function result_buffer_jump()
 end
 
 local function setup_highlights()
-    local colors = M.config.highlight_colors
-    M.config.hi_group_name = "LoganaMatch"
-    colors.default = true
-    pcall(api.nvim_set_hl, 0, M.config.hi_group_name, colors)
+    M.config.hi_match_group = "LoganaMatch"
+    local match_hl = vim.tbl_extend("force", {}, M.config.match_color)
+    match_hl.default = true
+    pcall(api.nvim_set_hl, 0, M.config.hi_match_group, match_hl)
+
+    M.config.hi_group_names = {}
+    for i, spec in ipairs(M.config.highlight_colors) do
+        local name = "LoganaHighlight" .. i
+        local hl = vim.tbl_extend("force", {}, spec)
+        hl.default = true
+        pcall(api.nvim_set_hl, 0, name, hl)
+        M.config.hi_group_names[i] = name
+    end
 end
 
 local function setup_config(opts)
@@ -538,8 +708,9 @@ function M.is_rule_buffer(buf)
     return ok and ft == M.config.naming.rule
 end
 
-function M.refresh(rule_buf)
-    return refresh_from_rule(rule_buf)
+-- opts.force: rerun level 1 even if nothing seems changed
+function M.refresh(rule_buf, opts)
+    return refresh_from_rule(rule_buf, opts and opts.force)
 end
 
 function M.open()

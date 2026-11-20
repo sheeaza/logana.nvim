@@ -4,8 +4,20 @@ local M = {
         args = { "--json", "--no-config", "--color", "never" },
     },
 
-    highlight_colors = {
+    -- level 1: every [rg] match shares this one color
+    match_color = {
          link = "TermCursor",
+    },
+
+    -- level 2: one color per line under [highlight], cycling through this list
+    -- if there are more lines than colors
+    highlight_colors = {
+        { link = "IncSearch" },
+        { link = "DiffAdd" },
+        { link = "DiffChange" },
+        { link = "DiffText" },
+        { link = "Substitute" },
+        { link = "MatchParen" },
     },
 
     highlight = {
@@ -66,6 +78,12 @@ local M = {
 
 [file]
 opened_only = true
+
+# below are rg args matched against the result lines, one color per line
+# Example:
+#    -e 'error'
+#    -i -e 'timeout' -e 'retry'
+[highlight]
 ]],
 
     key = {

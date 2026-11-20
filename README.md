@@ -3,12 +3,11 @@
 Lightweight log analyzer for Neovim. Open a rule buffer where each line is a Vim regex under a [match] section. Press Enter in the rule buffer to refresh a bound result buffer that lists matching lines and highlights the matched text.
 
 ## Features
-- Rule buffer with [match] section; each non-empty, non-comment line is a Vim regex
-- Searches the current source buffer (e.g., a log file) against all listed patterns
-- Result buffer shows lines in the format: line: <the matched line>
-- Highlights the matched substring with a dedicated highlight group
-- Press Enter in the rule buffer to refresh results instantly
-- Simple command: :Logana (optionally ":Logana refresh")
+- Two-level filtering, both driven by the rule buffer and using ripgrep syntax:
+  1. `[rg]`: ripgrep args. Matching lines from the files are listed in the result buffer, and every match shares one color (`LoganaMatch`).
+  2. `[highlight]`: one ripgrep args list per line, matched against the result lines. Each line gets its own color (`LoganaHighlight1..N`).
+- Pressing `<Enter>` in the rule buffer only redoes what's needed (see [Refresh](#refresh)).
+- Pressing `<Enter>` on a result line jumps to that line in the source file.
 
 ## Install
 - lazy.nvim:
@@ -28,59 +27,61 @@ Lightweight log analyzer for Neovim. Open a rule buffer where each line is a Vim
   })
 
 ## Usage
-1) Open a log file in a buffer (this is the source buffer).
-2) Run :Logana to open two panes on the right:
-   - Top-right: Rule buffer (scratch, filetype: logana_rules)
-   - Bottom-right: Result buffer (scratch, filetype: logana_results)
-3) In the rule buffer, define your regex rules under a [match] section:
+1) Open your log file(s).
+2) Run `:Logana`. This opens a rule buffer (`0.logana_rule`) and a result buffer (`0.logana_result`).
+3) Write the rules:
   ```ini
-   [match]
-   # Each line is a ripgrep regex.
-   xx.*[abc]
-  ```
-4) Press Enter in the rule buffer to refresh results.
-5) The result buffer will list all matched lines prefixed with:
-   `<line>: <the matched line>`
-   and will highlight the matched substring(s) with the LoganaMatch group.
+  [rg]
+  --smart-case
+  -e 'hw..?_cam'
+  -e 'resource'
 
-## Notes on Regex
-- Patterns are Vim regex (not Lua patterns). Consider using \v at the start for very-magic mode.
-- Each rule line is compiled and applied independently to each line of the source buffer.
-- If a line matches multiple patterns, it may appear multiple times in the results (once per matching rule).
-- The current version highlights the first match per line for each rule; duplicates of the same physical line can occur if multiple rules match.
+  [file]
+  # true: search only the files opened in nvim; false: rg searches cwd
+  opened_only = true
+
+  [highlight]
+  # one color per line; a line may hold several patterns and rg flags
+  -i -e 'error'
+  -e 'retry' -e 'busy'
+  ```
+4) Press `<Enter>` in the rule buffer. The result buffer lists `file: <path>` headers followed by `<line>: <text>`.
+
+### Refresh
+Pressing `<Enter>` checks each level in turn and only reruns what changed:
+- Level 1 reruns (and then level 2) if the `[rg]`/`[file]` args changed, any searched file changed on disk (only checked when `opened_only = true`), or the result buffer was edited or closed.
+- Otherwise level 2 reruns, but only if `[highlight]` changed.
+- `:Logana refresh` in the rule buffer forces both levels to rerun. Use this when `opened_only = false` and files under cwd changed.
 
 ## Commands
-- :Logana [refresh|bufnr]
-  Context-aware unified command. Behavior:
-  - If run in a Logana rule buffer: ensures a result buffer exists and refreshes it.
-  - If run in a non-rule buffer with no args: opens rule/result panes bound to the current buffer.
-  - If provided a numeric bufnr: opens panes bound to that buffer, e.g. :Logana 5
-  - If provided the subcmd "refresh": attempts to refresh the current rule/result context.
+- `:Logana`: in a rule buffer, refresh as described above. Anywhere else, open a new rule/result pair.
+- `:Logana refresh`: in a rule buffer, force a full refresh.
 
 ## API
-- require("logana").setup(opts)
-  Initializes the plugin and defines the highlight group. Called automatically by the plugin loader but safe to call manually.
-- require("logana").open({ source_buf = <bufnr> })
-  Programmatically open the rule/result panes bound to a given source buffer (defaults to current).
-- require("logana").refresh()
-  Refresh from the current rule or result buffer context.
+- `require("logana").setup(opts)`: see `lua/logana/defconfig.lua` for all options.
+- `require("logana").open()`
+- `require("logana").refresh(rule_buf, { force = false })`
 
 ## Highlight Customization
-- The matched substring is highlighted with the LoganaMatch group, which by default links to Search.
-- You can override it in your config:
-  vim.api.nvim_set_hl(0, "LoganaMatch", { fg = "#000000", bg = "#FFFF00", bold = true })
-  or link it:
-  vim.api.nvim_set_hl(0, "LoganaMatch", { link = "IncSearch" })
+```lua
+require("logana").setup({
+    match_color = { link = "TermCursor" },          -- level 1, LoganaMatch
+    highlight_colors = {                            -- level 2, LoganaHighlight1..N (cycled)
+        { fg = "#000000", bg = "#ff8800" },
+        { link = "DiffAdd" },
+    },
+})
+```
+Where both levels overlap, the level 2 color wins.
 
 ## Workflow Tips
 - Keep one pane on your log file (source buffer) while you iterate on patterns in the rule buffer.
-- Use \v to simplify complex Vim regex patterns.
-- You can close the rule/result quickly by pressing q in the rule buffer.
-- The rule buffer is a scratch buffer; it will be wiped when closed. Persist patterns by saving them elsewhere and pasting as needed.
+- Rule/result buffers are named files; `:w` them to keep your rules.
 
-## Limitations
-- Highlights the first match per line for each rule. If you need multiple matches per line highlighted, that can be added in a future iteration.
-- Operates on the currently loaded buffer contents only (no filesystem scanning).
+## Tests
+```sh
+nvim --headless -u NONE -l tests/run.lua   # details: tests/README.md
+```
 
 ## License
 MIT
