@@ -331,6 +331,21 @@ test("level 1 skips -A/-B context lines and keeps lines that aren't utf-8", func
     eq({ "match:1:busy" }, highlighted())
 end)
 
+test("context lines don't make level 1 parsing slow", function()
+    local rule = setup_session()
+    local lines = {}
+    for i = 1, 3000 do
+        lines[i] = (i % 3 == 0 and "busy " or "ctx ") .. ("x"):rep(2000)
+    end
+    vim.fn.writefile(lines, "a.log")
+    set_rule(rule, { "-C 1", "-e 'busy'" })
+    local t = vim.uv.hrtime()
+    refresh(rule)
+    eq(1000 + 2, #result_lines(), "line count")
+    -- unanchored, the 2000 context lines of 2000 bytes took seconds
+    eq(true, (vim.uv.hrtime() - t) / 1e6 < 500, "fast")
+end)
+
 test("invalid [highlight] pattern warns and keeps level 1", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'" }, { "-e '(bad'", "-e 'busy'" })

@@ -312,7 +312,10 @@ local function collect_matches(ropts)
     local lines, match, file_rows, hl_texts, hl_row, hl_delta = {}, {}, {}, {}, {}, {}
     local n, k, bytes, cur = 0, 0, 0, nil
 
-    for path, raw, lnum, text in res.stdout:gmatch("([^%z\n]*)%z((%d+): ([^\n]*))") do
+    -- anchored on '\n' (the output gets one in front): unanchored, a line that
+    -- doesn't match (a context line) is retried from each of its bytes, quadratic
+    -- in its length
+    for path, raw, lnum, text in ('\n' .. res.stdout):gmatch("\n([^%z\n]*)%z((%d+): ([^\n]*))") do
         if path ~= cur then
             if cur then
                 n = n + 1
