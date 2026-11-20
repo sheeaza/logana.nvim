@@ -75,14 +75,10 @@ local function setup_keybinding()
         group = M._quit_auto,
         callback = function()
             for _, b in ipairs(api.nvim_list_bufs()) do
-                local ok_ft, ft = pcall(api.nvim_get_option_value, "filetype", { buf = b })
-                ft = ok_ft and ft or ""
-                if ft == config.naming.rule or ft == config.naming.result then
-                    local abs_path = api.nvim_buf_get_name(b)
-                    local ok, stats = pcall(vim.uv.fs_stat, abs_path)
-                    if not (ok and stats) then
-                        pcall(api.nvim_set_option_value, "modified", false, { buf = b })
-                    end
+                local ft = vim.bo[b].filetype
+                if (ft == config.naming.rule or ft == config.naming.result)
+                    and not vim.uv.fs_stat(api.nvim_buf_get_name(b)) then
+                    pcall(api.nvim_set_option_value, "modified", false, { buf = b })
                 end
             end
         end,

@@ -61,8 +61,7 @@ local function get_result_buf(rule_buf)
 
     local result_buf = fn.bufnr(result_abs_path)
     if result_buf == -1 then
-        local ok, stats = pcall(vim.uv.fs_stat, result_abs_path)
-        if ok and stats then
+        if vim.uv.fs_stat(result_abs_path) then
             result_buf = fn.bufadd(result_abs_path)
             fn.bufload(result_buf)
         else

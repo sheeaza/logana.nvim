@@ -130,11 +130,9 @@ local function get_valid_opened_files()
     local result_ft = config.naming.result
     for _, b in ipairs(api.nvim_list_bufs()) do
         local abs_path = api.nvim_buf_get_name(b)
-        if api.nvim_buf_is_valid(b) and api.nvim_buf_is_loaded(b) and abs_path ~= "" then
-            local ok, stats = pcall(vim.uv.fs_stat, abs_path)
-            if ok and stats then
-                local ok_ft, ft = pcall(api.nvim_get_option_value, "filetype", { buf = b })
-                ft = ok_ft and ft or ""
+        if api.nvim_buf_is_loaded(b) and abs_path ~= "" then
+            if vim.uv.fs_stat(abs_path) then
+                local ft = vim.bo[b].filetype
                 if ft ~= rule_ft and ft ~= result_ft then
                     table.insert(files, fn.fnamemodify(abs_path, ":."))
                 end

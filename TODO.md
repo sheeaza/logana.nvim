@@ -77,9 +77,10 @@ From a review of the modules after the split.
   arrays, tens of MB on `large`) and `refresh.state[rule_buf]` are never cleared.
   Done; wiping the rule buffer also stops its level 1 run, which used to apply
   [fold] from the wiped buffer at the end.
-- [ ] Skip one copy per level 1 batch: the pump makes `data:sub(1, cut)` to drop the
-  partial last line; the ffi scanner could take `cut` as its length. Measure first.
-- [ ] Drop the `pcall`s around `vim.uv.fs_stat` (returns nil, doesn't throw) and
+- [x] ~~Skip one copy per level 1 batch~~: the pump makes `data:sub(1, cut)` to drop
+  the partial last line; the ffi scanner could take `cut` as its length. Measured,
+  no difference (`large` parse 354-386 ms before, 352-388 after), not kept.
+- [x] Drop the `pcall`s around `vim.uv.fs_stat` (returns nil, doesn't throw) and
   around 'filetype' lookups on valid buffers.
 - [ ] The first level 1 write clearing the previous result (738k lines) blocks ~245
   ms, the largest `max_batch`, with either parser. Find out where it goes.
