@@ -20,6 +20,14 @@ local M = {
         { link = "MatchParen" },
     },
 
+    -- shown in a float at the right end of the rule window's last line, above its
+    -- statusline, while results are loading, with the number of lines loaded so
+    -- far. set to false to disable
+    spinner = {
+        frames = { '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏' },
+        interval = 80, -- ms per frame
+    },
+
     highlight = {
         hl_buf = true,   -- true: also highlight normal buffers, except logana buffers. false: ...
         hl_result = true,-- true: highlight for result buffers. false: ...

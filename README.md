@@ -70,8 +70,10 @@ Pressing `<Enter>` checks each level in turn and only reruns what changed:
 - With `opened_only = false`, changes to files under cwd can't be detected, so pressing `<Enter>` without changing anything reruns both levels.
 
 Level 1 results load in the background: the first lines show right away and the rest
-are appended while you can keep working. `[highlight]` colors and folds are applied
-once loading is done. Pressing `<Enter>` while results are loading restarts the search
+are appended while you can keep working. While loading, a spinner and the number of
+lines loaded so far show in a small float at the right end of the rule window's last
+line, just above its statusline, so it works with any statusline plugin (`spinner` in the config, `false` to
+turn it off). `[highlight]` colors and folds are applied once loading is done. Pressing `<Enter>` while results are loading restarts the search
 if `[rg]`/`[file]` changed; otherwise the load continues and uses the new `[highlight]`
 and `[fold]` when it's done.
 

@@ -405,6 +405,36 @@ test("context lines don't make level 1 parsing slow", function()
     eq(true, (vim.uv.hrtime() - t) / 1e6 < 500, "fast")
 end)
 
+test("a spinner float shows on the rule window's last line while loading, then closes", function()
+    local rule = setup_session()
+    write_big_log(60000)
+    set_rule(rule, { "-e 'resource'" })
+    local win = api.nvim_get_current_win()
+    vim.wo[win].statusline = "%f%=%l"
+    local function spinners()
+        local out = {}
+        for _, w in ipairs(api.nvim_list_wins()) do
+            local c = api.nvim_win_get_config(w)
+            if c.relative == "win" and c.win == win then
+                table.insert(out, w)
+            end
+        end
+        return out
+    end
+    L.refresh(rule)
+    local floats = spinners()
+    eq(1, #floats, "one float while loading")
+    local c = api.nvim_win_get_config(floats[1])
+    eq(api.nvim_win_get_height(win) - 1, c.row, "on the last line, above the statusline")
+    eq(api.nvim_win_get_width(win), c.col + c.width, "at its right end")
+    eq(false, c.focusable, "not focusable")
+    local text = vim.trim(api.nvim_buf_get_lines(api.nvim_win_get_buf(floats[1]), 0, -1, false)[1])
+    eq(true, text:find("^%S+ loading %d+ lines$") ~= nil, "float text")
+    eq("%f%=%l", vim.wo[win].statusline, "statusline untouched")
+    vim.wait(5000, function() return not L._busy(rule) end, 1)
+    eq(0, #spinners(), "float closed when done")
+end)
+
 test("invalid [highlight] pattern warns and keeps level 1", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'" }, { "-e '(bad'", "-e 'busy'" })
