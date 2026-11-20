@@ -48,6 +48,7 @@ log.new = function(config, standalone)
   config = vim.tbl_deep_extend("force", default_config, config)
 
   local outfile = string.format('%s/%s.log', vim.api.nvim_call_function('stdpath', {'data'}), config.plugin)
+  vim.fn.mkdir(vim.fn.fnamemodify(outfile, ':h'), 'p')
 
   local obj
   if standalone then
@@ -125,10 +126,12 @@ log.new = function(config, standalone)
     -- Output to log file
     if config.use_file then
       local fp = io.open(outfile, "a")
-      local str = string.format("[%-6s%s] %s: %s\n",
-      nameupper, os.date(), lineinfo, msg)
-      fp:write(str)
-      fp:close()
+      if fp then
+        local str = string.format("[%-6s%s] %s: %s\n",
+        nameupper, os.date(), lineinfo, msg)
+        fp:write(str)
+        fp:close()
+      end
     end
   end
 
