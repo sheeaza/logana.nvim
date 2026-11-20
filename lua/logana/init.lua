@@ -30,7 +30,7 @@ local PRIORITY_MATCH = 4096
 local PRIORITY_HL = 4097
 
 -- per rule buffer refresh state, used to skip levels that don't need updating:
--- { match_sig, hl_sig, result_buf, result_dirty, attached_buf, hl_input, hl_rows }
+-- { match_sig, hl_sig, result_buf, result_dirty, attached_buf, hl_input, hl_map, file_rows }
 local RULE_STATE = {}
 
 -- exposed for tests only
@@ -233,21 +233,24 @@ local function parse_rule_buf(rule_buf)
     return rule
 end
 
--- level 1 output: '<path>\0<lnum>:<line>', each match in the line wrapped in
+-- level 1 output: '<path>\0<lnum>: <line>', each match in the line wrapped in
 -- MARK_S..MARK_E via --replace, which gives the line and every match range in one
--- pass. not --json, decoding it in lua took more than half of a large refresh.
+-- pass, and everything after the '\0' is already the result buffer line.
+-- not --json, decoding it in lua took more than half of a large refresh.
 -- context lines (-A/-B/-C) print '<lnum>-' and are skipped, like --json's
 -- "context" events were. a marker byte already in a log line would shift the
 -- columns after it on that line; they're ascii control chars logs don't use.
 local MARK_S, MARK_E = '\30', '\31'
 local LEVEL1_ARGS = { '--color', 'never', '--no-heading', '--with-filename', '--line-number',
-    '--no-column', '--null', '--replace', MARK_S .. '${0}' .. MARK_E }
+    '--no-column', '--null', '--field-match-separator', ': ',
+    '--replace', MARK_S .. '${0}' .. MARK_E }
 
--- strips the markers from a level 1 line; returns the text and its match ranges
+-- strips the markers from a level 1 line; returns the text and its match ranges,
+-- or nil ranges when there are none (e.g. with -v)
 local function unmark(raw)
     local a = raw:find(MARK_S, 1, true)
     if not a then
-        return raw, {}
+        return raw, nil
     end
     local b = raw:find(MARK_E, a + 1, true)
     -- most lines have one match, plain sub/concat is ~1/3 faster for those
@@ -273,24 +276,20 @@ local function unmark(raw)
 end
 
 --[[
-return result format:
+runs level 1 and builds the result buffer content in one pass over rg's output,
+without per match line intermediate tables:
 {
-    {
-        file_name = 'path/to/file',
-        lines = {
-            {
-                line_number = <%d>,
-                line_text = <%s>,
-                matches = {
-                    { <start_x>, <end_x> },
-                    ...
-                }
-            }, ...
-        }
-    }, ...
+    lines = { 'file: <path>', '<lnum>: <text>', ..., '' , ... },  -- buffer lines
+    match = { [row] = { {start_col, end_col}, ... } },            -- 0-based rows
+    file_rows = { { <1-based row of 'file: ' header>, <path> }, ... },
+    hl_input = '<text>\n...',  -- the matched line texts, stdin for level 2
+    hl_map = { row = { [i] = row }, delta = { [i] = col - hl_input offset } },
+}
 --]]
 local function collect_matches(ropts)
-    local ok_sys, proc = pcall(vim.system, ropts.args_common, { text = true })
+    -- not text = true: its '\r\n' gsub over the whole output cost about as much as rg.
+    -- a '\r' line ending stays in the line text, as it did with --json
+    local ok_sys, proc = pcall(vim.system, ropts.args_common)
     if not ok_sys or not proc then
         vim.notify("[logana] failed to execute ripgrep", vim.log.levels.WARN)
         return nil, "failed"
@@ -310,34 +309,58 @@ local function collect_matches(ropts)
     end
 
     local t1 = now_ms()
-    local results = {}
-    local cur_fentry = nil
+    local lines, match, file_rows, hl_texts, hl_row, hl_delta = {}, {}, {}, {}, {}, {}
+    local n, k, bytes, cur = 0, 0, 0, nil
 
-    for path, lnum, raw in res.stdout:gmatch("([^%z\n]*)%z(%d+):([^\n]*)") do
-        if not cur_fentry or cur_fentry.file_name ~= path then
-            cur_fentry = { file_name = path, lines = {} }
-            table.insert(results, cur_fentry)
+    for path, raw, lnum, text in res.stdout:gmatch("([^%z\n]*)%z((%d+): ([^\n]*))") do
+        if path ~= cur then
+            if cur then
+                n = n + 1
+                lines[n] = ''
+            end
+            n = n + 1
+            lines[n] = 'file: ' .. path
+            file_rows[#file_rows + 1] = { n, path }
+            cur = path
         end
-        local text, matches = unmark(raw)
-        local lines = cur_fentry.lines
-        lines[#lines + 1] = {
-            line_number = tonumber(lnum),
-            line_text = text,
-            matches = matches,
-        }
+        -- markers are only in the text part, so ranges are already buffer columns
+        local line, ranges = unmark(raw)
+        n = n + 1
+        lines[n] = line
+        local off = #lnum + 2
+        if ranges then
+            match[n - 1] = ranges
+            text = line:sub(off + 1)
+        end
+        k = k + 1
+        hl_texts[k] = text
+        hl_row[k] = n - 1
+        hl_delta[k] = off - bytes
+        bytes = bytes + #text + 1
     end
+    if cur then
+        n = n + 1
+        lines[n] = ''
+    end
+
+    local hl_input = k > 0 and table.concat(hl_texts, '\n') .. '\n' or ''
     log.trace(string.format("parse rg output took: %d ms", now_ms() - t1))
 
-    return results
+    return {
+        lines = lines,
+        match = match,
+        file_rows = file_rows,
+        hl_input = hl_input,
+        hl_map = { row = hl_row, delta = hl_delta },
+    }
 end
 
 -- level 2: run each [highlight] rule through rg over the result line texts (stdin),
 -- so highlight patterns use the same regex syntax/options as [rg].
--- hl_rows[i] = { row, col_offset, input_byte_offset } maps the i-th stdin line back to
--- the result buffer.
-local function collect_highlights(hl_rules, hl_input, hl_rows)
+-- hl_map maps the i-th stdin line back to the result buffer, see collect_matches.
+local function collect_highlights(hl_rules, hl_input, hl_map)
     local by_row = {}
-    if #hl_rules == 0 or #hl_rows == 0 or #M.config.hi_group_names == 0 then
+    if #hl_rules == 0 or #hl_map.row == 0 or #M.config.hi_group_names == 0 then
         return by_row
     end
 
@@ -354,6 +377,7 @@ local function collect_highlights(hl_rules, hl_input, hl_rows)
         procs[i] = ok and proc or false
     end
 
+    local rows, delta = hl_map.row, hl_map.delta
     for i, proc in ipairs(procs) do
         local res = proc and proc:wait()
         if not res or res.code == 2 then
@@ -361,10 +385,10 @@ local function collect_highlights(hl_rules, hl_input, hl_rows)
                 table.concat(hl_rules[i], ' '), res and res.stderr or "failed to execute ripgrep"), vim.log.levels.WARN)
         elseif res.code == 0 then
             for lnum, boff, text in res.stdout:gmatch("(%d+):(%d+):([^\n]*)") do
-                local pos = hl_rows[tonumber(lnum)]
-                if pos then
-                    local row = pos[1]
-                    local col = tonumber(boff) - pos[3] + pos[2]
+                local idx = tonumber(lnum)
+                local row = rows[idx]
+                if row then
+                    local col = tonumber(boff) + delta[idx]
                     local row_marks = by_row[row]
                     if not row_marks then
                         row_marks = {}
@@ -379,15 +403,7 @@ local function collect_highlights(hl_rules, hl_input, hl_rows)
     return by_row
 end
 
-local function render_results(result_buf, matches)
-    local lines = {}
-    local highlights_by_row = {}
-    local hl_texts = {}
-    local hl_rows = {}
-    local hl_bytes = 0
-    local file_rows = {}
-    local cur_line_num = 0
-
+local function render_results(result_buf, parsed)
     -- result buffers are fully regenerated on every refresh; there's nothing
     -- worth undoing to, and snapshotting hundreds of thousands of prior lines
     -- into the undo tree before each replace made repeated refreshes take seconds.
@@ -396,47 +412,13 @@ local function render_results(result_buf, matches)
     -- fn.bufadd/fn.bufload bypass create_normal_buffer's swapfile=false
     pcall(api.nvim_set_option_value, "swapfile", false, { buf = result_buf })
 
-    local t0 = now_ms()
-    for _, file in ipairs(matches) do
-        table.insert(lines, "file: " .. file.file_name)
-        cur_line_num = cur_line_num + 1
-        table.insert(file_rows, { cur_line_num, file.file_name })
-
-        for _, line in ipairs(file.lines) do
-            local prefix = ("%d: "):format(line.line_number)
-            table.insert(lines, prefix .. line.line_text)
-            cur_line_num = cur_line_num + 1
-
-            local row = cur_line_num - 1
-            local off = #prefix
-            table.insert(hl_texts, line.line_text)
-            table.insert(hl_rows, { row, off, hl_bytes })
-            hl_bytes = hl_bytes + #line.line_text + 1
-            if #line.matches > 0 then
-                local row_marks = {}
-                for _, hi in ipairs(line.matches) do
-                    table.insert(row_marks, { hi[1] + off, hi[2] + off })
-                end
-                highlights_by_row[row] = row_marks
-            end
-        end
-        table.insert(lines, '')
-        cur_line_num = cur_line_num + 1
-    end
-    log.trace(string.format("render_results prepare lines took: %d ms", now_ms() - t0))
-
     local t1 = now_ms()
-    api.nvim_buf_set_lines(result_buf, 0, -1, false, lines)
+    api.nvim_buf_set_lines(result_buf, 0, -1, false, parsed.lines)
     log.trace(string.format("render_results set lines took: %d ms", now_ms() - t1))
 
-    local t2 = now_ms()
     ensure_decoration_provider()
     -- level 2 highlights are recomputed against the new lines by the caller
-    RESULT_HIGHLIGHTS[result_buf] = { match = highlights_by_row, hl = {} }
-    log.trace(string.format("render_results hi took: %d ms", now_ms() - t2))
-
-    local hl_input = #hl_texts > 0 and table.concat(hl_texts, '\n') .. '\n' or ''
-    return hl_input, hl_rows, file_rows
+    RESULT_HIGHLIGHTS[result_buf] = { match = parsed.match, hl = {} }
 end
 
 local function get_valid_opened_files()
@@ -690,7 +672,7 @@ local function refresh_from_rule(rule_buf)
     if not result_intact or st.match_sig ~= ropts.match_sig
         or (unchanged and not ropts.opened_only) then
         local t0 = now_ms()
-        local matches, merr = collect_matches(ropts)
+        local parsed, merr = collect_matches(ropts)
         if merr then
             return nil, "collect_matches failed"
         end
@@ -698,7 +680,8 @@ local function refresh_from_rule(rule_buf)
 
         local result_buf = get_result_buf(rule_buf)
         local t1 = now_ms()
-        st.hl_input, st.hl_rows, st.file_rows = render_results(result_buf, matches)
+        render_results(result_buf, parsed)
+        st.hl_input, st.hl_map, st.file_rows = parsed.hl_input, parsed.hl_map, parsed.file_rows
         log.trace(string.format("render_results took: %d ms", now_ms() - t1))
 
         -- track user edits of the result buffer (changedtick can't be used, ':w'
@@ -738,7 +721,7 @@ local function refresh_from_rule(rule_buf)
 
     if st.hl_sig ~= ropts.hl_sig then
         local t2 = now_ms()
-        RESULT_HIGHLIGHTS[st.result_buf].hl = collect_highlights(ropts.hl_rules, st.hl_input, st.hl_rows)
+        RESULT_HIGHLIGHTS[st.result_buf].hl = collect_highlights(ropts.hl_rules, st.hl_input, st.hl_map)
         log.trace(string.format("collect_highlights took: %d ms", now_ms() - t2))
         st.hl_sig = ropts.hl_sig
         -- decoration provider marks are ephemeral; force visible windows to redraw them

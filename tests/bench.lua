@@ -57,7 +57,6 @@ end
 local PHASES = {
     { "rg", "rg" },
     { "parse rg output", "parse" },
-    { "render_results prepare lines", "prep" },
     { "render_results set lines", "set_lines" },
     { "collect_highlights", "hl" },
     { "save_folds", "save_fold" },

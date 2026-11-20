@@ -114,8 +114,8 @@ is attached. The cases search the camera log the numbers below were taken on:
 `large` is `CLIENT_MGR` (~740k), and `--xl` adds `Info  ` (~2.5M). All cases use the
 same three `[highlight]` rules. For another log, edit `CASES` in the script.
 
-Columns: `rg` level 1 rg run, `parse` its output, `prep` building the result
-lines, `set_lines` writing them, `hl` level 2, `save_fold`/`rest_fold` folds,
+Columns: `rg` level 1 rg run, `parse` its output into the result lines
+(`prep` was a separate pass before the third run below), `set_lines` writing them, `hl` level 2, `save_fold`/`rest_fold` folds,
 `total` the whole refresh, `rss_MB` resident memory after the case.
 
 ### Results
@@ -138,4 +138,14 @@ case    res_lines   rg   parse   prep  set_lines   hl   total   rss_MB
 small         887   82       1      0          0    7      95       16
 medium     132858  226     366    160         42   42     871      526
 large      740954  991    2523    686        196  187    4707     2503
+```
+
+Level 1 parsed and the result lines built in one pass, rg printing `<lnum>: ` itself
+via `--field-match-separator`, output read without `text = true` (median of 5):
+
+```
+case    res_lines   rg   parse   set_lines   hl   total   rss_MB
+small         887   83       1           0    7      94       16
+medium     132858  136     451          47   40     693      413
+large      740954  371    1592         225  173    2419     2153
 ```
