@@ -1,6 +1,6 @@
 # logana.nvim
 
-Lightweight log analyzer for Neovim. Open a rule buffer where each line is a Vim regex under a [match] section. Press Enter in the rule buffer to refresh a bound result buffer that lists matching lines and highlights the matched text.
+Lightweight log analyzer for Neovim. Write ripgrep args under an `[rg]` section in a rule buffer, then press Enter in it to refresh a bound result buffer that lists the matching lines and highlights the matched text.
 
 ## Features
 - Two-level filtering, both driven by the rule buffer and using ripgrep syntax:
