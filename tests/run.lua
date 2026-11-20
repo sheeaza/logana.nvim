@@ -561,23 +561,15 @@ test("wiping the rule buffer while loading stops the run", function()
     eq({}, errors, "errors")
 end)
 
--- every test runs with the ffi scanner (LuaJIT) and with the lua parser
 local failed, total = 0, 0
-local scan = require("logana.scan")
-local orig_enabled = process.enabled
-for _, ffi_mode in ipairs(scan.enabled and { true, false } or { false }) do
-    scan.enabled = ffi_mode
-    process.enabled = ffi_mode and orig_enabled
-    for _, t in ipairs(tests) do
-        total = total + 1
-        local ok, err = pcall(t.f)
-        local name = (ffi_mode and "[ffi] " or "[lua] ") .. t.name
-        if ok then
-            print("ok   " .. name)
-        else
-            failed = failed + 1
-            print("FAIL " .. name .. "\n  " .. tostring(err))
-        end
+for _, t in ipairs(tests) do
+    total = total + 1
+    local ok, err = pcall(t.f)
+    if ok then
+        print("ok   " .. t.name)
+    else
+        failed = failed + 1
+        print("FAIL " .. t.name .. "\n  " .. tostring(err))
     end
 end
 print(("%d/%d passed"):format(total - failed, total))

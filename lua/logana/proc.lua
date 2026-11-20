@@ -7,8 +7,8 @@ local uv = vim.uv
 
 local M = {}
 
-local has_ffi, ffi = pcall(require, 'ffi')
-M.enabled = has_ffi and ffi.os == 'Linux' -- tests turn it off to cover vim.system
+local ffi = require('ffi')
+M.enabled = ffi.os == 'Linux'
 if M.enabled then
     -- each on its own, another plugin may have declared some already
     for _, decl in ipairs({

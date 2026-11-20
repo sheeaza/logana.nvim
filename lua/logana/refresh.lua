@@ -80,7 +80,7 @@ end
 -- many bytes, each in its own main loop callback, so neovim stays responsive and
 -- the first lines show while rg is still running
 local BATCH_BYTES = 1024 * 1024
--- the ffi scanner's lines go to the buffer once per BATCH_BYTES or this many ms:
+-- the scanned lines go to the buffer once per BATCH_BYTES or this many ms:
 -- each ':read' costs a temp file write, and the pump batches are only ~100 KB
 local FLUSH_MS = 100
 
@@ -93,7 +93,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
     local gen = st.gen
     local job = {
         sig = ropts.match_sig, ropts = ropts, fold_edited = fold_edited, on_done = on_done,
-        chunks = {}, head = 1, tail = 0, rest = '', parser = level1.new_parser(), ffi = scan.enabled,
+        chunks = {}, head = 1, tail = 0, rest = '', parser = level1.new_parser(),
         t0 = now_ms(), flushed = 0, parse_ms = 0, set_ms = 0, max_ms = 0,
     }
     st.job = job
@@ -104,9 +104,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
     local function done(res)
         job.finished = true
         st.job = nil
-        if job.ffi then
-            scan.release()
-        end
+        scan.release()
         job.stop_spinner()
         if res.code == 2 then
             vim.notify(("[logana] ripgrep error for: %s"):format(res.stderr or "exit code 2"), vim.log.levels.WARN)
@@ -136,8 +134,8 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         finish_refresh(rule_buf, st, job.ropts, true, job.fold_edited, t_all, job.on_done)
     end
 
-    -- lines: a table from parse_batch, or nil for what scan_batch collected
-    local function write(lines)
+    -- puts what scan_batch collected in the buffer
+    local function write()
         st.writing = true
         if not job.started then
             job.started = true
@@ -150,11 +148,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
             -- fn.bufadd/fn.bufload bypass create_normal_buffer's swapfile=false
             pcall(api.nvim_set_option_value, "swapfile", false, { buf = result_buf })
             attach_result(st, result_buf)
-            if job.ffi then
-                scan.read_scanned(result_buf, job.parser, true)
-            else
-                api.nvim_buf_set_lines(result_buf, 0, -1, false, lines)
-            end
+            scan.read_scanned(result_buf, job.parser, true)
             st.result_buf = result_buf
             st.result_dirty = false
             highlight.ensure_decoration_provider()
@@ -169,10 +163,8 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
                 api.nvim_win_call(win, function() vim.cmd('silent! normal! zE') end)
             end
             result.show_result(rule_buf, result_buf)
-        elseif job.ffi then
-            scan.read_scanned(result_buf, job.parser, false)
         else
-            api.nvim_buf_set_lines(result_buf, -1, -1, false, lines)
+            scan.read_scanned(result_buf, job.parser, false)
         end
         st.writing = false
     end
@@ -215,22 +207,13 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         else
             job.rest, data = data, ''
         end
-        local t1
-        if job.ffi then
-            local p = job.parser
-            scan.scan_batch(p, data)
-            t1 = now_ms()
-            if p.o > 0 and (p.o >= BATCH_BYTES or not job.started or t1 - job.flushed >= FLUSH_MS
-                    or (job.exit and job.head > job.tail)) then
-                write()
-                job.flushed = t1
-            end
-        else
-            local lines = level1.parse_batch(job.parser, data)
-            t1 = now_ms()
-            if #lines > 0 then
-                write(lines)
-            end
+        local p = job.parser
+        scan.scan_batch(p, data)
+        local t1 = now_ms()
+        if p.o > 0 and (p.o >= BATCH_BYTES or not job.started or t1 - job.flushed >= FLUSH_MS
+                or (job.exit and job.head > job.tail)) then
+            write()
+            job.flushed = t1
         end
         local t2 = now_ms()
         job.parse_ms = job.parse_ms + t1 - t

@@ -54,9 +54,6 @@ runner adds the repo to `runtimepath` itself.
   created relative to cwd, so each test starts with nothing left over from the previous one.
 - Turns on `filetype` detection, which `-u NONE` leaves off; rule buffers are set up
   by their `FileType` autocmd.
-- Runs every test twice: with the LuaJIT ffi scanner for level 1 and rg started
-  with `posix_spawn` (`[ffi]`), and with the Lua parser and `vim.system`, used
-  without LuaJIT (`[lua]`).
 - Reads the computed highlights from `require("logana")._result_highlights` and
   turns them into readable strings:
 

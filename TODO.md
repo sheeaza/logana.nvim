@@ -101,8 +101,9 @@ From a review of the modules after the split.
   Done with `posix_spawn` (`proc.lua`, linux + LuaJIT, `vim.system` elsewhere):
   `large` total 1063 -> 803 ms, max_batch 251 -> 57 ms, one screen of level 2
   25 -> 6 ms.
-- [ ] Maybe: require LuaJIT and drop the lua parser (~100 lines, the `write`/pump
+- [x] Maybe: require LuaJIT and drop the lua parser (~100 lines, the `write`/pump
   branches, half the test runtime). Costs the few platforms built with PUC Lua.
+  Done: `scan.lua` errors without LuaJIT, tests run once.
 
 ## References
 

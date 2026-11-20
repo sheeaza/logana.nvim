@@ -10,6 +10,8 @@ Lightweight log analyzer for Neovim. Write ripgrep args under an `[rg]` section 
 - Pressing `<Enter>` on a result line jumps to that line in the source file.
 
 ## Install
+Needs Neovim built with LuaJIT (the default) and ripgrep.
+
 - lazy.nvim:
   {
     "yourname/logana.nvim",

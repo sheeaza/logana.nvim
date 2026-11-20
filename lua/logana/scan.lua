@@ -1,23 +1,23 @@
--- level 1 with LuaJIT: the ffi scanner, and putting its lines in the buffer
+-- level 1: the ffi scanner, and putting its lines in the buffer
 local api = vim.api
 local fn = vim.fn
 
 local M = {}
 
--- with LuaJIT, level 1 is scanned byte by byte through the ffi instead, and the
--- result lines go to the buffer with ':read' from a temp file, made in C: no lua
--- string per line, which is most of level1.parse_batch's cost. ~3x faster level 1.
-local has_ffi, ffi = pcall(require, 'ffi')
-M.enabled = has_ffi -- tests turn it off to cover the lua parser
-if has_ffi then
-    -- each on its own, another plugin may have declared some already
-    for _, decl in ipairs({ 'void *fopen(const char *path, const char *mode);',
-        'size_t fwrite(const void *buf, size_t size, size_t n, void *f);', 'int fclose(void *f);',
-        -- linux only. long is off_t for the unsuffixed symbols, also on 32 bit
-        'int memfd_create(const char *name, unsigned int flags);', 'int ftruncate(int fd, long len);',
-        'long pwrite(int fd, const void *buf, size_t n, long off);' }) do
-        pcall(ffi.cdef, decl)
-    end
+-- level 1 is scanned byte by byte through the ffi, and the result lines go to the
+-- buffer with ':read' from a temp file, made in C: no lua string per line, ~3x
+-- faster than a lua gmatch parser. needs LuaJIT, which neovim is built with almost everywhere
+local ok, ffi = pcall(require, 'ffi')
+if not ok then
+    error('[logana] needs a neovim built with LuaJIT')
+end
+-- each on its own, another plugin may have declared some already
+for _, decl in ipairs({ 'void *fopen(const char *path, const char *mode);',
+    'size_t fwrite(const void *buf, size_t size, size_t n, void *f);', 'int fclose(void *f);',
+    -- linux only. long is off_t for the unsuffixed symbols, also on 32 bit
+    'int memfd_create(const char *name, unsigned int flags);', 'int ftruncate(int fd, long len);',
+    'long pwrite(int fd, const void *buf, size_t n, long off);' }) do
+    pcall(ffi.cdef, decl)
 end
 
 local function copy_bytes(dst, o, src, s, e)
@@ -28,7 +28,7 @@ local function copy_bytes(dst, o, src, s, e)
     return o
 end
 
--- same as level1.parse_batch, but appends the buffer lines to p.out, p.o bytes so far,
+-- parses whole lines of level 1 output (level1.lua), appends the buffer lines to p.out, p.o bytes so far,
 -- for read_scanned. headers are found by comparing each line's path with the
 -- previous one, kept in p.path
 local function scan_batch(p, data)
