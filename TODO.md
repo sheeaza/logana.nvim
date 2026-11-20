@@ -100,8 +100,11 @@ growing log appended is out of scope.
   stays ~65 ms, so the longest batch wasn't the rehash. Reserving room per batch
   (half its bytes as rows) instead of checking per row doubled the arrays on every
   batch of a small result, 3x slower there.
-- [ ] The bench only searches one file. Add a case over many files (10k+): `apply_folds`
+- [x] The bench only searches one file. Add a case over many files (10k+): `apply_folds`
   runs two ex commands per file and `capture_folds` a `foldclosed` per file.
+  Measured, no change needed: 10k files (the same log split), folds ~10-20 ms, also
+  with all closed, see `tests/README.md`. `max_batch` is ~100 ms there vs ~65 ms on
+  one file, for the `:read` item below.
 - [ ] Scrolling: level 2 starts one rg per rule on every redraw with new rows, holding
   `<C-d>` can start dozens. Debounce the requests from `on_end`.
 - [ ] `:read` (~248 ms, ~55 of it clearing the old result) is neovim's memline. Find

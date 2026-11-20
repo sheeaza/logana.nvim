@@ -117,6 +117,8 @@ is attached. The cases search the camera log the numbers below were taken on:
 `small` is `ResourceReserve` (~900 matches), `medium` is `DRV_COMMON` (~130k),
 `large` is `CLIENT_MGR` (~740k), and `--xl` adds `Info  ` (~2.5M). All cases use the
 same three `[highlight]` rules. For another log, edit `CASES` in the script.
+To time many files, pass a directory, e.g. a log split into ~10k files with
+`split -l 882 -a 5 -d <log> <dir>/f`.
 
 Columns (the first three runs below predate streaming): `rg` level 1 rg run, `parse`
 its output into the result lines (`prep` was a separate pass before the third run),
@@ -249,4 +251,18 @@ case    res_lines   first   parse   set_lines   max_batch   level1    hl   total
 small        8984       5      10           4           3      108     6     108       21
 medium     131719       5      72          43           9      204     6     205       51
 large      738898       5     342         248          57      802     6     803      206
+```
+
+The same over many files: the 500 MB log of 8.8M lines split into 9993 files of
+~52 KB, `small` `op 955`, `medium` `E Audio`, `large` `Display`, i5-12500H, ripgrep
+15.2.0, Neovim 0.12.5 (median of 3). With a header and a fold per file, the folds take
+~10-20 ms, also with all of them closed (`zM` before the runs: `save_fold` 3-6 ms,
+writing ~10k `[fold]` lines). rg searches the files on all cores, so `large` level 1
+is ~450 ms, against ~715 ms for the one 500 MB file.
+
+```
+case    res_lines   first   parse   set_lines   max_batch   level1    hl   save_fold   rest_fold   total   rss_MB
+small       18824      14      14          24          22      184     6           0          11     195       24
+medium     240813      15      70          69          49      292     6           1          19     315       44
+large     1120484      16     220         191         100      454     6           1          17     472      130
 ```
