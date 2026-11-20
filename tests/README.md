@@ -253,11 +253,29 @@ medium     131719       5      72          43           9      204     6     205
 large      738898       5     342         248          57      802     6     803      206
 ```
 
-The same over many files: the 500 MB log of 8.8M lines split into 9993 files of
-~52 KB, `small` `op 955`, `medium` `E Audio`, `large` `Display`, i5-12500H, ripgrep
-15.2.0, Neovim 0.12.5 (median of 3). With a header and a fold per file, the folds take
-~10-20 ms, also with all of them closed (`zM` before the runs: `save_fold` 3-6 ms,
-writing ~10k `[fold]` lines). rg searches the files on all cores, so `large` level 1
+Level 1 scanned with `memchr`/`ffi.copy`, rg writing to a memfd instead of a pipe,
+the ranges in ffi arrays, the old result cleared with `:%delete _` (see `TODO.md`).
+Another synthetic 500 MB log (8.8M shorter lines), `small` is `op 955`, `medium`
+`E Audio`, `large` `Display` (`CASES` edited), i5-12500H, ripgrep 15.2.0, Neovim
+0.12.5 (median of 5). rg alone takes ~640 ms of `large`'s level 1, on one core: one
+file is searched by one thread.
+
+```
+case    res_lines   first   parse   set_lines   max_batch   level1    hl   total   rss_MB
+before:
+small        7896       6       5           2           1      126     6     126       17
+medium     220829       5      80          49          13      278     6     278       51
+large     1100500       5     400         227          61      946     6     947      200
+after:
+small        7896       9       6           2           1      126     6     127       17
+medium     220829       7      46          30          11      234     6     234       36
+large     1100500      10     205         147          51      720     7     721      124
+```
+
+The same log split into 9993 files of ~52 KB, before the `:%delete _` change (median
+of 3). With a header and a fold per file, the folds take ~10-20 ms, also with all
+of them closed (`zM` before the runs: `save_fold` 3-6 ms, writing ~10k `[fold]`
+lines). rg searches the files on all cores, so `large` level 1
 is ~450 ms, against ~715 ms for the one 500 MB file.
 
 ```
