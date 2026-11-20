@@ -142,6 +142,18 @@ local function split_with_quotes(str)
     return result
 end
 
+-- whether rg args give a pattern: a positional arg, -e/--regexp or -f/--file
+-- (also inside a short flag cluster like '-ie')
+local function has_pattern(args)
+    for _, arg in ipairs(args) do
+        if not arg:match("^%-") or arg:match("^%-%-regexp") or arg:match("^%-%-file")
+            or (arg:match("^%-[^-]") and arg:match("^%-%a*[ef]")) then
+            return true
+        end
+    end
+    return false
+end
+
 local function parse_rule_buf(rule_buf)
     local rule = {}
     local lines = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
@@ -180,11 +192,23 @@ local function parse_rule_buf(rule_buf)
         end
     end
 
-    -- each [highlight] line is its own rg args list, and gets its own color
+    -- each [highlight] line with a pattern is its own rg args list, and gets its own
+    -- color. lines with only flags (e.g. '--smart-case') are shared by every rule,
+    -- placed first so a rule's own flags override them.
     rule.hl_rules = {}
     if rule.highlight then
+        local shared = {}
+        local patterns = {}
         for _, line in ipairs(rule.highlight.lines) do
-            table.insert(rule.hl_rules, split_with_quotes(line))
+            local args = split_with_quotes(line)
+            if has_pattern(args) then
+                table.insert(patterns, args)
+            else
+                vim.list_extend(shared, args)
+            end
+        end
+        for _, args in ipairs(patterns) do
+            table.insert(rule.hl_rules, vim.list_extend(vim.list_slice(shared), args))
         end
     end
 

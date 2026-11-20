@@ -83,7 +83,9 @@ opened_only = true
 # Example:
 #    -e 'error'
 #    -i -e 'timeout' -e 'retry'
+# a line with only flags (no pattern) applies to every line
 [highlight]
+--smart-case
 ]],
 
     key = {

@@ -19,7 +19,7 @@ Each test prints one line, followed by a summary:
 ok   level 1 lists matched lines with one shared color
 ok   level 2 colors each [highlight] line separately, using rg syntax
 ...
-10/10 passed
+12/12 passed
 ```
 
 The exit code is `0` if every test passed and `1` otherwise, so the command can be
@@ -43,7 +43,7 @@ runner adds the repo to `runtimepath` itself.
 - Wraps `vim.system` to count how many `rg` processes each refresh starts. The
   tests check this count to confirm which levels re-ran:
   - level 1 (`[rg]`) runs one `rg`;
-  - level 2 (`[highlight]`) runs one `rg` per `[highlight]` line;
+  - level 2 (`[highlight]`) runs one `rg` per `[highlight]` line that has a pattern;
   - `0` means nothing re-ran.
 - For every test, wipes all buffers, `cd`s into a new temp dir, writes a small
   `a.log`, opens it, and runs `:Logana`. Rule and result files are created

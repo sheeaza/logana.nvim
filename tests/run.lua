@@ -106,6 +106,23 @@ test("level 2 colors each [highlight] line separately, using rg syntax", functio
     }, highlighted())
 end)
 
+test("[highlight] flag-only lines apply to every rule, without taking a color", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" }, { "-e 'error'", "--smart-case", "-e 'Retry'", "-e 'retry'" })
+    eq(4, refresh(rule), "rg calls")   -- level 1 + 3 highlight rules
+    eq({
+        "match:1:resource", "hl:1:ERROR:1",
+        "match:2:resource", "hl:2:retry:3",
+    }, highlighted())
+end)
+
+test("a [highlight] rule's own flags override the shared ones", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" }, { "-i", "-s -e 'error'", "-e 'timeout'" })
+    refresh(rule)
+    eq({ "match:1:resource", "match:2:resource", "hl:2:Timeout:2" }, highlighted())
+end)
+
 test("only [highlight] changed: level 1 is skipped", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'" })

@@ -41,7 +41,9 @@ Lightweight log analyzer for Neovim. Open a rule buffer where each line is a Vim
   opened_only = true
 
   [highlight]
-  # one color per line; a line may hold several patterns and rg flags
+  # one color per line; a line may hold several patterns and rg flags.
+  # a line with only flags applies to every line and takes no color.
+  --smart-case
   -i -e 'error'
   -e 'retry' -e 'busy'
   ```
