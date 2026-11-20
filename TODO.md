@@ -28,12 +28,40 @@ Numbers are for the `large` case of `tests/bench.lua` (740k result lines), see
   Measured offline on `large`: rg `--heading` to a file 180 ms, `:read ++bin` of it
   (135 MB, 740k lines) 90 ms; columns from a second rg `-o --column --sort path`
   230 ms (can run alongside) + 210 ms Lua parse. About 0.5 s vs 2.05 s now. To solve:
-  - both rg runs must list files in the same order: `--sort path`, which makes rg
-    single-threaded over directories
+  - both rg runs must list files in the same order. `--sort path` is NOT acceptable:
+    it makes rg single-threaded, and multi-GB inputs must stay multi-threaded. Needs
+    a design with one rg run (lines and columns from the same output)
   - `-A/-B/-C` context lines show in the lines run but not in `-o`: override with
     `--context 0` (the result already drops context lines)
   - headers: rg prints the bare path, rewrite those few rows to `file: <path>`
-  - level 2: run `-o --column` over the source files and keep matches on result rows,
-    instead of feeding the texts on stdin (no 120 MB hl_input string)
-  - no streaming: first lines at ~0.3 s instead of ~30 ms, but done in ~0.5 s;
-    the longest block is the ~90 ms read plus the column parse (can be batched)
+  Single-run design, prototyped offline (`large`): keep the one rg run with match
+  markers and `--heading` (a header is the first line or the line after a blank one),
+  and scan each ~1 MB batch with a LuaJIT FFI byte loop that copies the lines minus
+  the markers into a C buffer, records match columns, rows and the level 2 text,
+  with no Lua string per line. Write the buffer to a temp file and `:$read ++bin` it.
+  Level 1 ~0.57 s vs ~1.9 s, longest batch 12 ms vs 78 ms, streaming kept, rg stays
+  multi-threaded. To handle: `file: ` prefix on headers (write it while copying),
+  force no context (`-A 0 -B 0` last), `:read` moves the cursor of windows showing
+  the buffer, and keep the current Lua parser as a fallback when there's no LuaJIT.
+- [ ] Search one multi-GB file with several threads (klogg does this: 10k-line
+  chunks to N matcher threads, hits stored as `chunk start + offset` in a roaring
+  bitmap, which merges in any order; lnav doesn't split a file). rg uses one thread per file
+  (`-j 1` and `-j 16` both ~0.08 s, ~95% of one CPU on the 500 MB `xaa`), so a big
+  file needs splitting into chunks / byte ranges, searched in parallel, with results
+  put back in file order and line numbers offset per chunk.
+- [ ] Lazy level 2: compute [highlight] only for rows as they're drawn (as klogg
+  does), caching per row, instead of all rows at the end of a refresh. neovim's regex
+  isn't rg's syntax, so it would mean calling rg for the visible rows.
+
+## References
+
+Read 2026-11-20, shallow clones of github.com/variar/klogg and github.com/tstack/lnav.
+- Neither keeps line text in memory: an index of line offsets (klogg: delta-encoded
+  blocks of 128 with streamvbyte; lnav: 16 bytes per line), text read on demand for
+  the visible rows only.
+- Matches are integer sets (klogg: roaring bitmap; lnav: `uint32` vectors / btree of
+  line numbers), streamed to the UI in batches (klogg throttles to 100 ms, lnav every
+  10k lines).
+- Highlights are computed at render time for visible rows only, no per-line cache.
+- klogg uses Hyperscan with all patterns in one database; lnav runs up to 32 PCRE2
+  patterns in one pass, in forked child processes.
