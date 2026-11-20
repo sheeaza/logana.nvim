@@ -35,6 +35,19 @@ local function find(src, i, e, c)
     return r == nil and e or tonumber(ffi.cast(u8p, r) - src)
 end
 
+local rows_t, cols_t = ffi.typeof('int32_t[?]'), ffi.typeof('uint32_t[?]')
+
+-- a copy of the used elements of arr, a ct array of cap elements, with room for
+-- at least need, and its new capacity
+local function grow(ct, arr, cap, need, used)
+    cap = math.max(2 * cap, need, 4096)
+    local grown = ffi.new(ct, cap)
+    if used > 0 then
+        ffi.copy(grown, arr, used * 4)
+    end
+    return grown, cap
+end
+
 -- parses whole lines of level 1 output (level1.lua), a string or n bytes at a
 -- pointer, appends the buffer lines to p.out, p.o bytes so far,
 -- for read_scanned. headers are found by comparing each line's path with the
@@ -52,8 +65,8 @@ local function scan_batch(p, data, n)
     local src = ffi.cast(u8p, data)
     local row, k = p.n, p.k
     local file_rows = p.file_rows
-    local first, count, cols = p.match.first, p.match.count, p.match.cols
-    local nc = #cols
+    local m = p.match
+    local start, cols, nc, scap, ccap = m.start, m.cols, m.nc, m.scap, m.ccap
     local i, o = 0, p.o
 
     while i < n do
@@ -70,13 +83,19 @@ local function scan_batch(p, data, n)
             end
             if i > ls and src[i] == 58 and src[i + 1] == 32 then
                 i = i + 2
+                -- a line makes at most 3 rows: blank, header and its own
+                if row + 3 > scap then
+                    start, scap = grow(rows_t, start, scap, row + 3, row)
+                end
                 if plen ~= p.plen or C.memcmp(src + ps, p.path, plen) ~= 0 then
                     if p.cur then
+                        start[row] = nc
                         out[o], o, row = 10, o + 1, row + 1
                     end
                     ffi.copy(out + o, FILE_PREFIX, 6)
                     ffi.copy(out + o + 6, src + ps, plen)
                     o = o + 6 + plen
+                    start[row] = nc
                     out[o], o, row = 10, o + 1, row + 1
                     if plen > p.pcap then
                         p.pcap = 2 * plen
@@ -93,29 +112,30 @@ local function scan_batch(p, data, n)
                 o = o + i - ls
                 -- the text up to each marker is copied, the markers dropped; a stray
                 -- one in a log line only shifts its own columns
-                local c0, ms = nc, nil
+                local ms
+                start[row] = nc
                 local s30, s31 = find(src, i, e, 30), find(src, i, e, 31)
                 while true do
-                    local m = s30 < s31 and s30 or s31
-                    ffi.copy(out + o, src + i, m - i)
-                    o = o + m - i
-                    if m == e then
+                    local mk = s30 < s31 and s30 or s31
+                    ffi.copy(out + o, src + i, mk - i)
+                    o = o + mk - i
+                    if mk == e then
                         break
                     end
-                    if m == s30 then
+                    if mk == s30 then
                         ms = o - lo
-                        s30 = find(src, m + 1, e, 30)
+                        s30 = find(src, mk + 1, e, 30)
                     else
                         if ms then
-                            cols[nc + 1], cols[nc + 2] = ms, o - lo
+                            if nc + 2 > ccap then
+                                cols, ccap = grow(cols_t, cols, ccap, nc + 2, nc)
+                            end
+                            cols[nc], cols[nc + 1] = ms, o - lo
                             nc, ms = nc + 2, nil
                         end
-                        s31 = find(src, m + 1, e, 31)
+                        s31 = find(src, mk + 1, e, 31)
                     end
-                    i = m + 1
-                end
-                if nc > c0 then
-                    first[row], count[row] = c0 + 1, (nc - c0) / 2
+                    i = mk + 1
                 end
                 out[o], o, row, k = 10, o + 1, row + 1, k + 1
             end
@@ -124,6 +144,7 @@ local function scan_batch(p, data, n)
     end
 
     p.n, p.k, p.o = row, k, o
+    m.start, m.cols, m.n, m.nc, m.scap, m.ccap = start, cols, row, nc, scap, ccap
 end
 
 -- rg's output on linux: rg writes it to a memfd, read back here with pread. a pipe

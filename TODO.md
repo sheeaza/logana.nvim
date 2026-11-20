@@ -91,9 +91,15 @@ growing log appended is out of scope.
   (`parse` 292 -> 220, `set_lines` 240 -> 167), RSS 192 -> 164 MB. rg alone takes
   ~640 ms of it (single threaded on one file): its `--replace` markers ~180 ms, `-n`
   ~140 ms. A 1 MB pipe (`F_SETPIPE_SZ`) instead got 931 -> 845 ms.
-- [ ] Keep the level 1 ranges (`first`, `count`, `cols`, ~2.2M numbers on `large`) in
+- [x] Keep the level 1 ranges (`first`, `count`, `cols`, ~2.2M numbers on `large`) in
   ffi `uint32_t` arrays grown by doubling, instead of Lua tables, which rehash inside
   a batch at each power of two.
+  Done: `cols` and a `start` per row (where its ranges begin, the next row's is where
+  they end) in two ffi arrays, `count` dropped. Same log: `scan_batch` alone 185 ->
+  137 ms, `parse` 220 -> 186, `level1` 732 -> ~715 ms, RSS 164 -> 123 MB. `max_batch`
+  stays ~65 ms, so the longest batch wasn't the rehash. Reserving room per batch
+  (half its bytes as rows) instead of checking per row doubled the arrays on every
+  batch of a small result, 3x slower there.
 - [ ] The bench only searches one file. Add a case over many files (10k+): `apply_folds`
   runs two ex commands per file and `capture_folds` a `foldclosed` per file.
 - [ ] Scrolling: level 2 starts one rg per rule on every redraw with new rows, holding

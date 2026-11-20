@@ -4,6 +4,7 @@ local config = require('logana.config')
 local log = require('logana.log')
 local now_ms = require('logana.util').now_ms
 local process = require('logana.proc')
+local ranges = require('logana.level1').ranges
 
 local M = {}
 
@@ -11,11 +12,10 @@ local NS_MATCH = api.nvim_create_namespace("logana.match")
 
 -- highlight ranges per result buffer, keyed by 0-based row:
 -- {
---     -- level 1, [rg]: the row's ranges are cols[first[row]], cols[first[row] + 1], ...
---     -- for count[row] pairs. only numbers, no table per row: the incremental GC
---     -- re-marks every live table while a large result streams in, which made it
---     -- cost as much as the parsing
---     match = { first = { [row] = i }, count = { [row] = n }, cols = { s1, e1, s2, e2, ... } },
+--     -- level 1, [rg]: in ffi arrays, see level1.lua's ranges. no table per row:
+--     -- the incremental GC re-marks every live table while a large result streams
+--     -- in, which made it cost as much as the parsing
+--     match = { start, cols, ... },
 --     -- level 2, [highlight], computed for rows as they're drawn, see highlight_rows.
 --     -- false: asked for, or no match. replaced when the rules change
 --     hl = { [row] = { {start_col, end_col, hl_idx}, ... } | false },
@@ -58,12 +58,9 @@ local function ensure_decoration_provider()
         on_line = function(_, _, bufnr, row)
             local hls = RESULT_HIGHLIGHTS[bufnr]
             local m = hls.match
-            local i = m.first[row]
-            if i then
-                local cols, group = m.cols, config.hi_match_group
-                for j = i, i + 2 * m.count[row] - 1, 2 do
-                    draw_mark(bufnr, row, cols[j], cols[j + 1], group, PRIORITY_MATCH)
-                end
+            local lo, hi = ranges(m, row)
+            for j = lo, hi - 1, 2 do
+                draw_mark(bufnr, row, m.cols[j], m.cols[j + 1], config.hi_match_group, PRIORITY_MATCH)
             end
             local marks = hls.hl[row]
             if marks == nil and #hls.hl_rules > 0 then
@@ -192,12 +189,12 @@ end
 -- level 1 ranges of a row as { {start_col, end_col}, ... }, or nil
 local function match_ranges(bufnr, row)
     local m = RESULT_HIGHLIGHTS[bufnr].match
-    local i = m.first[row]
-    if not i then
+    local lo, hi = ranges(m, row)
+    if lo == hi then
         return nil
     end
     local out = {}
-    for j = i, i + 2 * m.count[row] - 1, 2 do
+    for j = lo, hi - 1, 2 do
         out[#out + 1] = { m.cols[j], m.cols[j + 1] }
     end
     return out
