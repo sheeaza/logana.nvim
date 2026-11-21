@@ -8,9 +8,29 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
   maybe per color (a count or a key per `LoganaHighlightN`). The level 2 ranges are
   only known for rows already drawn (lazy level 2), so jumping past the screen needs
   an rg run over the rows below / above.
-- [ ] Hit counts per rule: how many result lines each `[rg]` pattern and each
+- [x] Hit counts per rule: how many result lines each `[rg]` pattern and each
   `[highlight]` line matches, as virtual text at the end of the rule line. For level 2
   that means a run over all result lines (not only the drawn ones), async.
+  - counted over the result lines, not the source files: one `rg --count` per rule
+    over the result texts (`<lnum>: ` prefix, headers and blank lines dropped), so
+    a count is how many result lines that rule's rg matches
+  - `[rg]`: a line with `-e`/`--regexp`/`-f`/`--file` is a rule; the flags of the
+    other lines (`config.rg.args` too) are shared by every rule, paths in them
+    dropped. `[highlight]`: the lines that get a color, with the shared flags, as
+    level 2 runs them
+  - level 1's scanner copies each line's text to a memfd as it goes (no lua string
+    per line); kept until the next level 1 run, so a `[highlight]` change only
+    reruns those counts
+  - eol virtual text in the rule buffer: ` … ` while counting, then the number, in
+    the rule's color (`LoganaMatch` / `LoganaHighlightN`); `!` when rg fails.
+    Extmarks, so they follow edits; recomputed on refresh
+  - `hit_count = false` in the config turns it off
+  Done: `count.lua`, the texts in `scan.lua` (`p.txt`, `open_texts`). The counts run
+  in `finish_refresh`, after level 1 is done. `test-500m.log` (8.8M lines), results of
+  1.0M / 1.1M / 1.8M lines, `hit_count` off -> on: `level1` 374 -> 372, 450 -> 426,
+  586 -> 591 ms (noise); the counts are in 31 / 36 / 57 ms after the refresh. The
+  memfd holds a copy of the result texts (shmem, not in `rss_MB`) until the next level
+  1 run or the rule buffer is wiped.
 - [ ] Context on demand: a key in the result buffer shows the source lines around the
   cursor's line (±N, config) in a float, read from the file, without rerunning level 1.
 - [ ] Quickfix export: put the result rows in the quickfix / location list (file, line,

@@ -11,12 +11,15 @@ local result = require('logana.result')
 local fold = require('logana.fold')
 local spinner = require('logana.spinner')
 local process = require('logana.proc')
+local count = require('logana.count')
+local config = require('logana.config')
 
 local M = {}
 
 -- per rule buffer refresh state, used to skip levels that don't need updating:
 -- { match_sig, hl_sig, result_buf, result_dirty, attached_buf, file_rows,
---   job (level 1 run in progress), gen, writing }
+--   job (level 1 run in progress), gen, writing,
+--   texts (the result lines' texts, scan.open_texts), counts (count.lua) }
 local RULE_STATE = {}
 
 local function rule_state_of_result(result_buf)
@@ -58,11 +61,18 @@ end
 local function finish_refresh(rule_buf, st, ropts, rerendered, fold_edited, t_all, on_done)
     result.show_result(rule_buf, st.result_buf)
 
-    if st.hl_sig ~= ropts.hl_sig then
+    local hl_changed = st.hl_sig ~= ropts.hl_sig
+    if hl_changed then
         highlight.reset_highlights(highlight.by_buf[st.result_buf], ropts)
         st.hl_sig = ropts.hl_sig
         -- decoration provider marks are ephemeral; force visible windows to redraw them
         pcall(api.nvim__redraw, { buf = st.result_buf, valid = false })
+    end
+    if rerendered then
+        count.run(rule_buf, st, 'rg', ropts.rg_counts)
+    end
+    if rerendered or hl_changed then
+        count.run(rule_buf, st, 'hl', ropts.hl_counts)
     end
 
     if rerendered or fold_edited then
@@ -102,6 +112,13 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
     job.stop_spinner = spinner.start_spinner(rule_buf, job)
     -- an interrupted or failed run leaves a partial buffer, the next refresh reruns
     st.match_sig = nil
+    -- the old counts and texts are of the old result
+    count.stop_all(rule_buf, st)
+    if st.texts then
+        scan.close_texts(st.texts)
+    end
+    st.texts = config.hit_count and scan.open_texts() or nil
+    job.parser.texts = st.texts ~= nil
 
     local function done(res)
         job.finished = true
@@ -123,6 +140,9 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         end
 
         local p = job.parser
+        if st.texts then
+            scan.finish_texts(st.texts)
+        end
         if p.cur then
             st.writing = true
             api.nvim_buf_set_lines(result_buf, -1, -1, false, { '' })
@@ -171,6 +191,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         else
             scan.read_scanned(result_buf, job.parser, false)
         end
+        scan.write_texts(st.texts, job.parser)
         st.writing = false
     end
 
@@ -352,6 +373,12 @@ local function forget(buf)
         st.gen = st.gen + 1 -- the run's callbacks see they're stale
         st.job.stop_spinner()
         pcall(st.job.proc.kill, st.job.proc, 15)
+    end
+    if st then
+        count.stop_all(buf, st)
+        if st.texts then
+            scan.close_texts(st.texts)
+        end
     end
     RULE_STATE[buf] = nil
     highlight.by_buf[buf] = nil

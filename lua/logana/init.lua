@@ -18,6 +18,11 @@ function M._busy(rule_buf)
     local st = refresh.state[rule_buf]
     return st ~= nil and st.job ~= nil
 end
+function M._counting(rule_buf)
+    local st = refresh.state[rule_buf]
+    return st ~= nil and require('logana.count').busy(st)
+end
+M._count_ns = require('logana.count').ns
 
 local function setup_config(opts)
     local defconfig = require('logana.defconfig')

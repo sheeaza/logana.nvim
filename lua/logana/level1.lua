@@ -22,7 +22,8 @@ local LEVEL1_ARGS = { '--color', 'never', '--no-heading', '--with-filename', '--
 -- }
 local function new_parser()
     return { n = 0, k = 0, match = { n = 0, nc = 0, scap = 0, ccap = 0 }, file_rows = {},
-        o = 0, cap = 0, plen = -1, pcap = 0 } -- scan_batch's output and current path
+        o = 0, cap = 0, plen = -1, pcap = 0, -- scan_batch's output and current path
+        texts = false, to = 0, tcap = 0 } -- and the line texts, for the hit counts
 end
 
 -- level 1 ranges of a row, kept in two ffi arrays filled by scan_batch, no lua

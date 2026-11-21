@@ -55,12 +55,52 @@ local function has_pattern(args)
     return false
 end
 
+-- rg flags that take a value as the next arg, so it isn't taken for a path
+local VALUE_FLAGS = {}
+for _, f in ipairs({ '-A', '-B', '-C', '-d', '-E', '-g', '-j', '-m', '-M', '-r', '-t', '-T',
+    '--after-context', '--before-context', '--context', '--max-depth', '--encoding', '--glob',
+    '--iglob', '--threads', '--max-count', '--max-columns', '--replace', '--type', '--type-not',
+    '--type-add', '--type-clear', '--max-filesize', '--sort', '--sortr', '--path-separator',
+    '--pre', '--pre-glob', '--ignore-file', '--engine', '--dfa-size-limit', '--regex-size-limit',
+    '--colors', '--color', '--context-separator', '--field-context-separator',
+    '--field-match-separator', '--hyperlink-format' }) do
+    VALUE_FLAGS[f] = true
+end
+
+-- whether rg args give a pattern with -e/--regexp or -f/--file (positional ones
+-- aren't, in [rg] they're paths once a -e is there)
+local function has_explicit_pattern(args)
+    for _, arg in ipairs(args) do
+        if arg:match("^%-%-regexp") or arg:match("^%-%-file") or arg:match("^%-%a*[ef]") then
+            return true
+        end
+    end
+    return false
+end
+
+-- the flags of rg args, positional args (paths) dropped
+local function flags_only(args)
+    local out, i = {}, 1
+    while i <= #args do
+        local a = args[i]
+        if a:match("^%-") then
+            out[#out + 1] = a
+            if VALUE_FLAGS[a] and args[i + 1] then
+                out[#out + 1] = args[i + 1]
+                i = i + 1
+            end
+        end
+        i = i + 1
+    end
+    return out
+end
+
 local function parse_rule_buf(rule_buf)
     local rule = {}
     local lines = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
 
     local section = ''
-    for _, line in ipairs(lines) do
+    for lnum, line in ipairs(lines) do
         local s = line:gsub("%s+$", "")
 
         if s:match("^%s*$") or s:match("^%s*#") then
@@ -69,10 +109,11 @@ local function parse_rule_buf(rule_buf)
             local cur_section = s:match("^%s*%[(.+)%]%s*$")
             if cur_section then
                 section = cur_section
-                rule[section] = { lines = {} }
+                rule[section] = { lines = {}, lnums = {} }
             elseif section ~= '' then
                 local m = s:match("^%s*(.*)%s*$")
                 table.insert(rule[section].lines, m or s)
+                table.insert(rule[section].lnums, lnum)
             end
         end
     end
@@ -87,23 +128,35 @@ local function parse_rule_buf(rule_buf)
     end
 
     rule.rg.cmd = {}
-    for _, line in ipairs(rule.rg.lines) do
-        for _, arg in ipairs(split_with_quotes(line)) do
-            table.insert(rule.rg.cmd, arg)
+    -- hit counts: each [rg] line with a -e/-f is counted on its own, with the
+    -- flags of the other lines
+    local rg_shared, rg_patterns = {}, {}
+    for i, line in ipairs(rule.rg.lines) do
+        local args = split_with_quotes(line)
+        vim.list_extend(rule.rg.cmd, args)
+        if has_explicit_pattern(args) then
+            table.insert(rg_patterns, { args = args, lnum = rule.rg.lnums[i] })
+        else
+            vim.list_extend(rg_shared, flags_only(args))
         end
+    end
+    rule.rg_counts = {}
+    for _, r in ipairs(rg_patterns) do
+        table.insert(rule.rg_counts, { args = vim.list_extend(vim.list_slice(rg_shared), r.args), lnum = r.lnum })
     end
 
     -- each [highlight] line with a pattern is its own rg args list, and gets its own
     -- color. lines with only flags (e.g. '--smart-case') are shared by every rule,
     -- placed first so a rule's own flags override them.
-    rule.hl_rules = {}
+    rule.hl_rules, rule.hl_lnums = {}, {}
     if rule.highlight then
         local shared = {}
         local patterns = {}
-        for _, line in ipairs(rule.highlight.lines) do
+        for i, line in ipairs(rule.highlight.lines) do
             local args = split_with_quotes(line)
             if has_pattern(args) then
                 table.insert(patterns, args)
+                table.insert(rule.hl_lnums, rule.highlight.lnums[i])
             else
                 vim.list_extend(shared, args)
             end
@@ -145,12 +198,14 @@ end
 
 local function get_runtime_opts(rule_buf)
     local args = { config.rg.cmd }
+    local user_args = {}
     for _, a in ipairs(config.rg.args) do
         -- output format is fixed by LEVEL1_ARGS; drop the old default from user configs
         if a ~= '--json' then
-            table.insert(args, a)
+            table.insert(user_args, a)
         end
     end
+    vim.list_extend(args, user_args)
     vim.list_extend(args, LEVEL1_ARGS)
 
     -- exclude rule/result files
@@ -192,11 +247,25 @@ local function get_runtime_opts(rule_buf)
         table.insert(hl_sig, table.concat(rule_args, '\0'))
     end
 
+    -- the rules hit counts run: { args, lnum, group }, see count.lua
+    local rg_counts, hl_counts = {}, {}
+    for _, r in ipairs(rule.rg_counts) do
+        table.insert(rg_counts, { args = vim.list_extend(vim.list_slice(user_args), r.args), lnum = r.lnum,
+            group = config.hi_match_group })
+    end
+    local names = config.hi_group_names
+    for i, rule_args in ipairs(rule.hl_rules) do
+        table.insert(hl_counts, { args = vim.list_extend({ '--no-config' }, rule_args), lnum = rule.hl_lnums[i],
+            group = #names > 0 and names[(i - 1) % #names + 1] or 'Comment' })
+    end
+
     return {
         args_common = args,
         match_sig = table.concat(sig, '\n'),
         hl_rules = rule.hl_rules,
         hl_sig = table.concat(hl_sig, '\n'),
+        rg_counts = rg_counts,
+        hl_counts = hl_counts,
         opened_only = rule.file and rule.file.opened_only or false,
     }
 end

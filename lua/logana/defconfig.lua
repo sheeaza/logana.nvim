@@ -32,6 +32,11 @@ local M = {
         interval = 80, -- ms per frame
     },
 
+    -- at the end of each [rg] line with a -e/-f and each colored [highlight] line in
+    -- the rule buffer: how many result lines it matches, counted after a refresh.
+    -- false to turn off
+    hit_count = true,
+
     highlight = {
         hl_buf = true,   -- true: also highlight normal buffers, except logana buffers. false: ...
         hl_result = true,-- true: highlight for result buffers. false: ...

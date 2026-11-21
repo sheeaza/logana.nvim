@@ -9,6 +9,7 @@ Lightweight log analyzer for Neovim. Write ripgrep args under an `[rg]` section 
 - Pressing `<Enter>` in the rule buffer only redoes what's needed (see [Refresh](#refresh)).
 - Pressing `<Enter>` on a result line jumps to that line in the source file.
 - Selecting text in the result buffer and pressing `<Enter>` adds it to `[highlight]`, or removes it if it's there (see [Toggling a highlight](#toggling-a-highlight)).
+- Each rule line shows how many result lines it matches (see [Hit counts](#hit-counts)).
 
 ## Install
 Needs Neovim built with LuaJIT (the default) and ripgrep.
@@ -100,6 +101,18 @@ text removes that line. Only lines that are exactly that rule count, patterns in
 other lines are left alone. If the line can't be written (the text has both quotes) or
 rg rejects it with the section's flags, it warns and adds nothing. The rule buffer is
 edited like any buffer, it isn't saved.
+
+### Hit counts
+After a refresh, the end of each `[rg]` line with a `-e`/`-f` and of each `[highlight]`
+line that gets a color shows how many result lines it matches, in that rule's color
+(` … ` while counting, `!` if rg failed). Each rule is counted with its own rg run
+over all result lines, not only the ones drawn, in the background. The flags of the
+other lines in the section are shared by every rule, as level 2 does for `[highlight]`;
+in `[rg]`, lines without a pattern (e.g. `-g '*.log'`, paths) aren't counted. For a
+line with several patterns the count is of the lines matching any of them.
+`[rg]` counts are redone when level 1 reruns, `[highlight]` counts also when
+`[highlight]` changes. The counts are virtual text: they move with edits to the rule
+buffer and are updated on the next refresh. `hit_count = false` turns them off.
 
 ## API
 - `require("logana").setup(opts)`: see `lua/logana/defconfig.lua` for all options.

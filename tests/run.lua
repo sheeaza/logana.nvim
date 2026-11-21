@@ -13,8 +13,13 @@ L.setup({})
 
 local process = require("logana.proc")
 local orig_system = process.system
-local rg_calls, level1_calls = 0, 0
+local rg_calls, level1_calls, count_calls = 0, 0, 0
 process.system = function(args, ...)
+    -- hit counts run apart from the levels, counted on their own
+    if vim.tbl_contains(args, "--count") then
+        count_calls = count_calls + 1
+        return orig_system(args, ...)
+    end
     rg_calls = rg_calls + 1
     if vim.tbl_contains(args, "--null") then
         level1_calls = level1_calls + 1
@@ -55,6 +60,18 @@ local function refresh(rule_buf)
     L.refresh(rule_buf)
     vim.wait(5000, function() return not L._busy(rule_buf) end, 1)
     return rg_calls
+end
+
+-- waits for the hit counts, returns { [1-based rule buffer line] = "<count>" }
+local function counts(rule_buf)
+    vim.wait(5000, function() return not L._counting(rule_buf) end, 1)
+    local out = {}
+    for _, m in ipairs(api.nvim_buf_get_extmarks(rule_buf, L._count_ns, 0, -1, { details = true })) do
+        if not m[4].invalid then
+            out[m[2] + 1] = vim.trim(m[4].virt_text[1][1])
+        end
+    end
+    return out
 end
 
 local function result_buf()
@@ -318,6 +335,61 @@ test("rule window gets layout.rule_window percent of the rule/result split", fun
 end)
 
 -- session searching a.log and b.log; returns the rule bufnr
+test("hit counts: each [rg] -e line and colored [highlight] line, over the result lines", function()
+    local rule = setup_session()
+    -- lines: 1 [rg], 2-5, 6 [file], 7, 8 [highlight], 9-12. flag-only lines are
+    -- shared, the -g isn't counted
+    set_rule(rule, { "-i", "-e 'RESOURCE'", "-e 'hardware'", "-g '*.log'" },
+        { "-i", "-e 'RESOURCE'", "-e 'busy' -e 'retry'", "-e 'nomatch'" })
+    count_calls = 0
+    refresh(rule)
+    eq({ [3] = "2", [4] = "1", [10] = "2", [11] = "2", [12] = "0" }, counts(rule))
+    eq(5, count_calls, "one rg per counted rule")
+end)
+
+test("hit counts: a [highlight] change recounts only [highlight], marks follow edits", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+    refresh(rule)
+    eq({ [2] = "2", [6] = "1" }, counts(rule))
+    api.nvim_buf_set_lines(rule, 0, 0, false, { "# a comment" })
+    api.nvim_buf_set_lines(rule, -2, -1, false, { "-e 'r'" })
+    count_calls = 0
+    eq(0, refresh(rule), "level 1 skipped")
+    eq({ [3] = "2", [7] = "2" }, counts(rule))
+    eq(1, count_calls, "only [highlight] recounted")
+    count_calls = 0
+    refresh(rule)
+    eq(0, count_calls, "nothing changed: no recount")
+end)
+
+test("hit counts cover every result line, also of a streamed level 1", function()
+    local rule = setup_session()
+    local lines = {}
+    for i = 1, 200000 do
+        lines[i] = i % 2 == 0 and ("line %d even resource"):format(i) or ("line %d odd resource"):format(i)
+    end
+    vim.fn.writefile(lines, "a.log")
+    vim.cmd("checktime")
+    set_rule(rule, { "-e 'resource'" }, { "-e 'even'", "-e '^line'" })
+    refresh(rule)
+    eq({ [2] = "200000", [6] = "100000", [7] = "200000" }, counts(rule))
+end)
+
+test("hit counts: hit_count = false shows none", function()
+    local rule = setup_session()
+    L.config.hit_count = false
+    set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+    count_calls = 0
+    local ok, err = pcall(function()
+        refresh(rule)
+        eq({}, counts(rule))
+        eq(0, count_calls, "no count runs")
+    end)
+    L.config.hit_count = true
+    assert(ok, err)
+end)
+
 local function setup_two_files()
     local rule = setup_session()
     vim.fn.writefile(LOG, "b.log")

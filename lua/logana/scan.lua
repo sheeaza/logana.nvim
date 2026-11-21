@@ -51,7 +51,8 @@ end
 -- parses whole lines of level 1 output (level1.lua), a string or n bytes at a
 -- pointer, appends the buffer lines to p.out, p.o bytes so far,
 -- for read_scanned. headers are found by comparing each line's path with the
--- previous one, kept in p.path
+-- previous one, kept in p.path. with p.texts, each line's text also goes to
+-- p.txt, p.to bytes so far, for write_texts
 local function scan_batch(p, data, n)
     n = n or #data
     -- a line grows by at most the 'file: ' header and blank line before it
@@ -61,7 +62,14 @@ local function scan_batch(p, data, n)
         ffi.copy(grown, p.out, p.o)
         p.out = grown
     end
-    local out = p.out
+    local texts = p.texts
+    if texts and p.tcap < p.to + n + 1 then
+        p.tcap = 2 * (p.to + n + 1)
+        local grown = ffi.new('uint8_t[?]', p.tcap)
+        ffi.copy(grown, p.txt, p.to)
+        p.txt = grown
+    end
+    local out, txt, to = p.out, p.txt, p.to
     local src = ffi.cast(u8p, data)
     local row, k = p.n, p.k
     local file_rows = p.file_rows
@@ -110,6 +118,7 @@ local function scan_batch(p, data, n)
                 local lo = o
                 ffi.copy(out + o, src + ls, i - ls)
                 o = o + i - ls
+                local ts = o
                 -- the text up to each marker is copied, the markers dropped; a stray
                 -- one in a log line only shifts its own columns
                 local ms
@@ -138,12 +147,16 @@ local function scan_batch(p, data, n)
                     i = mk + 1
                 end
                 out[o], o, row, k = 10, o + 1, row + 1, k + 1
+                if texts then
+                    ffi.copy(txt + to, out + ts, o - ts)
+                    to = to + o - ts
+                end
             end
         end
         i = e + 1
     end
 
-    p.n, p.k, p.o = row, k, o
+    p.n, p.k, p.o, p.to = row, k, o, to
     m.start, m.cols, m.n, m.nc, m.scap, m.ccap = start, cols, row, nc, scap, ccap
 end
 
@@ -267,6 +280,61 @@ local function release()
     end
 end
 
+-- the texts of the result lines, for the hit counts (count.lua) to run rg on:
+-- '<lnum>: ', headers and blank lines dropped. on linux a memfd, read by rg
+-- through /proc/<pid>/fd/<fd>, else a file in the run dir. nil if neither works
+local texts_n = 0
+local function open_texts()
+    local pid = vim.uv.os_getpid()
+    local ok, fd = pcall(function() return C.memfd_create('logana.texts', 1) end) -- MFD_CLOEXEC
+    if ok and fd >= 0 then
+        return { fd = fd, size = 0, path = ('/proc/%d/fd/%d'):format(pid, fd) }
+    end
+    texts_n = texts_n + 1
+    local path = ('%s/logana.%d.%d.txt'):format(fn.stdpath('run'), pid, texts_n)
+    local f = C.fopen(path, 'wb')
+    if f == nil then
+        return nil
+    end
+    return { f = f, size = 0, path = path }
+end
+
+-- appends what scan_batch put in p.txt. t.failed if a write fell short
+local function write_texts(t, p)
+    if t and not t.failed and p.to > 0 then
+        local n
+        if t.fd then
+            n = tonumber(C.pwrite(t.fd, p.txt, p.to, t.size))
+        else
+            n = t.f ~= nil and tonumber(C.fwrite(p.txt, 1, p.to, t.f)) or 0
+        end
+        t.failed = n ~= p.to
+        t.size = t.size + p.to
+    end
+    p.to = 0
+end
+
+-- all of it written: the file is complete for rg to read
+local function finish_texts(t)
+    if t.f then
+        C.fclose(t.f)
+        t.f = nil
+    end
+end
+
+local function close_texts(t)
+    if t.fd then
+        C.close(t.fd)
+    else
+        finish_texts(t)
+        os.remove(t.path)
+    end
+end
+
+M.open_texts = open_texts
+M.write_texts = write_texts
+M.finish_texts = finish_texts
+M.close_texts = close_texts
 M.scan_batch = scan_batch
 M.read_scanned = read_scanned
 M.release = release
