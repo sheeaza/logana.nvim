@@ -923,6 +923,73 @@ test("follow: an edited result finds the file header by searching", function()
     eq({ 3, 0 }, api.nvim_win_get_cursor(src_win), "row 5")
 end)
 
+-- the tests above fire CursorMoved themselves; this one runs the plugin in a child
+-- `nvim --embed`, whose main loop fires the events from real keys, in its own order
+test("follow end to end: real keys and events in a child nvim", function()
+    local dir = vim.fn.tempname()
+    vim.fn.mkdir(dir, "p")
+    vim.fn.writefile(LOG, dir .. "/a.log")
+    local ch = vim.fn.jobstart({ vim.v.progpath, "--embed", "--headless", "-u", "NONE" },
+        { rpc = true, cwd = dir })
+    local function lua(code, ...)
+        return vim.rpcrequest(ch, "nvim_exec_lua", code, { ... })
+    end
+    -- types keys and waits for them: a request that isn't a fast one is answered
+    -- once the child waits for input again, after the keys and the CursorMoved
+    local function keys(k)
+        vim.rpcrequest(ch, "nvim_input", k)
+        vim.rpcrequest(ch, "nvim_eval", "1")
+    end
+    local function cursor(win)
+        return lua("return vim.api.nvim_win_get_cursor(...)", win)
+    end
+
+    local ok, err = pcall(function()
+        lua([[
+            vim.opt.rtp:prepend(...)
+            vim.cmd("filetype on")
+            require("logana").setup({})
+            vim.cmd("edit a.log")
+            vim.cmd("vsplit 0.logana_rule")
+            local rule = vim.api.nvim_get_current_buf()
+            vim.api.nvim_buf_set_lines(rule, 0, -1, false,
+                { "[rg]", "-e 'resource'", "[file]", "opened_only = true", "[highlight]" })
+            _G.done = false
+            require("logana").refresh(rule, function() _G.done = true end)
+        ]], root)
+        vim.wait(5000, function() return lua("return _G.done") end, 5)
+        local src = lua("return vim.fn.bufwinid('a.log')")
+        local res = lua("return vim.fn.bufwinid('0.logana_result')")
+        eq({ "file: a.log", "1: cam ERROR resource busy", "3: resource Timeout retry", "" },
+            lua("return vim.api.nvim_buf_get_lines(vim.fn.bufnr('0.logana_result'), 0, -1, false)"))
+
+        -- a cursor on a matched row, never followed: entering doesn't follow it
+        lua("vim.api.nvim_win_set_cursor(..., { 3, 0 })", res)
+        keys((":call win_gotoid(%d)<CR>"):format(res))
+        eq({ 1, 0 }, cursor(src), "entering: not moved")
+        keys("gg")
+        eq({ 1, 0 }, cursor(src), "the header: not moved")
+        keys("jj")
+        eq(res, lua("return vim.api.nvim_get_current_win()"), "still in the result")
+        eq({ 3, 0 }, cursor(src), "row 3")
+        keys("k")
+        eq({ 1, 0 }, cursor(src), "row 2")
+
+        keys((":call win_gotoid(%d)<CR>"):format(src))
+        keys("G")
+        keys((":call win_gotoid(%d)<CR>"):format(res))
+        eq({ 4, 0 }, cursor(src), "going back to the result doesn't undo the move")
+        keys("j")
+        eq({ 3, 0 }, cursor(src), "moving in the result follows again")
+
+        keys("<CR>")
+        eq(src, lua("return vim.api.nvim_get_current_win()"), "<Enter> goes to the source window")
+        eq({ 3, 0 }, cursor(src), "on the row's line")
+    end)
+    vim.fn.jobstop(ch)
+    assert(ok, err)
+end)
+
 local failed, total = 0, 0
 for _, t in ipairs(tests) do
     total = total + 1

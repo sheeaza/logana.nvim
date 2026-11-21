@@ -167,8 +167,9 @@ end
 -- follow: the result window's cursor moved to another row, move the cursor of the
 -- source file's window in this tab to it too, staying in the result window. only
 -- on a row change, CursorMoved also fires on entering a window: after moving in
--- the source window, going back to the result doesn't undo it.
--- (follow_enter records the row on WinEnter, which comes before that CursorMoved)
+-- the source window, going back to the result doesn't undo it. the window's last
+-- followed row covers that; follow_enter, on WinEnter (before that CursorMoved),
+-- also covers a window entered with no row followed yet, e.g. its cursor set by code
 local function follow_enter()
     vim.w.logana_follow_row = api.nvim_win_get_cursor(0)[1]
 end

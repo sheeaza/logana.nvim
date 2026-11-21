@@ -69,6 +69,11 @@ The highlights are not read from the screen. The decoration provider only draws
 the ranges stored in that table, so checking the table also checks what gets
 drawn.
 
+`-l` runs no main loop, so events it fires between keys, like `CursorMoved`, never
+come. The follow tests fire them themselves, in the order Neovim does; one test
+also runs the plugin in a child `nvim --embed` and types real keys into it
+(`nvim_input`), to check that order against Neovim's own.
+
 ## Helpers
 
 | Helper | Purpose |
