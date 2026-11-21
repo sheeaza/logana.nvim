@@ -4,10 +4,6 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 
 ## Navigation
 
-- [ ] `]h` / `[h` in a result buffer: jump to the next / previous [highlight] match,
-  maybe per color (a count or a key per `LoganaHighlightN`). The level 2 ranges are
-  only known for rows already drawn (lazy level 2), so jumping past the screen needs
-  an rg run over the rows below / above.
 - [x] Hit counts per rule: how many result lines each `[rg]` pattern and each
   `[highlight]` line matches, as virtual text at the end of the rule line. For level 2
   that means a run over all result lines (not only the drawn ones), async.
@@ -69,8 +65,6 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
   After a refresh the non-result windows are redrawn (`redraw_sources`). `test-500m.log`
   (8.8M lines) in the source window: a screen at the top / middle / end colored in
   2.1 / 2.5 / 2.3 ms, only the drawn rows cached. Wiping a rule buffer redraws them too.
-- [ ] Quickfix export: put the result rows in the quickfix / location list (file, line,
-  col of the first match), so `:cnext` and pickers work on them.
 
 ## Rules from the result
 
@@ -110,6 +104,18 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
   the camera log.
 - [ ] Bench case with a broad [highlight] rule (matching most lines), to see whether the
   cancelled `collect_highlights` item (`DONE.md`) is worth reopening.
+
+## Low priority, not planned
+
+Hopping match to match (`]h`, `]q`) isn't the intended workflow: the result buffer is
+the list, `<Enter>` and follow go to the source. Kept in case that changes.
+
+- [ ] `]h` / `[h` in a result buffer: jump to the next / previous [highlight] match,
+  maybe per color (a count or a key per `LoganaHighlightN`). The level 2 ranges are
+  only known for rows already drawn (lazy level 2), so jumping past the screen needs
+  an rg run over the rows below / above.
+- [ ] Quickfix export: put the result rows in the quickfix / location list (file, line,
+  col of the first match), so `:cnext` and pickers work on them.
 
 ## References
 
