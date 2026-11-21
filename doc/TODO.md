@@ -2,16 +2,6 @@
 
 Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 
-## Behavior
-
-- [ ] Editing from the result buffer doesn't refresh: the user refreshes by hand with
-  `<Enter>` in the rule buffer. Today the visual `<Enter>` toggle edits `[highlight]`
-  and calls `refresh_from_rule` right away (`init.lua`, `toggle_selection_highlight`);
-  it should only edit the rule buffer. Update the README (Toggling a highlight) to match.
-  Edits typed in the result buffer stay as they are (no refresh), and the next refresh
-  throws them away: the result buffer is volatile, edits meant to last go in the source
-  file. Say so in the README.
-
 ## Packaging and docs
 
 - [ ] `doc/logana.txt`: vimdoc help (`:h logana`), from the README.

@@ -248,8 +248,8 @@ test("a [highlight] rule's own flags override the shared ones", function()
 end)
 
 -- in the result window: select `keys` from (row, col) (1-based row, 0-based col),
--- press <Enter>, and wait for [highlight] to change (adding waits on rg) and the
--- refresh it starts, or for `done()`
+-- press <Enter>, and wait for [highlight] to change (adding waits on rg), or for
+-- `done()`. it doesn't refresh
 local function toggle_selection(rule, row, col, keys, done)
     local tick = api.nvim_buf_get_changedtick(rule)
     api.nvim_set_current_win(vim.fn.bufwinid(result_buf()))
@@ -288,13 +288,20 @@ test("visual <Enter> in the result adds the selection to [highlight], again remo
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'" }, { "--smart-case" })
     refresh(rule)
+    local level1_before = level1_calls
     toggle_selection(rule, 2, 7, "v4l")   -- "1: cam ERROR ..."
     eq({ "--smart-case", "-F -e 'ERROR'" }, hl_section(rule))
+    eq("n", api.nvim_get_mode().mode, "mode")
+    -- no refresh until <Enter> in the rule buffer
+    eq({ "match:1:resource", "match:2:resource" }, highlighted())
+    eq(level1_before, level1_calls, "level 1 runs before the refresh")
+    refresh(rule)
     eq({ "match:1:resource", "hl:1:ERROR:1", "match:2:resource" }, highlighted())
     toggle_selection(rule, 2, 7, "v4l")
     eq({ "--smart-case" }, hl_section(rule))
+    eq({ "match:1:resource", "hl:1:ERROR:1", "match:2:resource" }, highlighted())
+    refresh(rule)
     eq({ "match:1:resource", "match:2:resource" }, highlighted())
-    eq("n", api.nvim_get_mode().mode, "mode")
 end)
 
 test("visual <Enter> over several lines only shows a message", function()
@@ -335,6 +342,7 @@ test("a selection with regex characters and quotes is matched as is", function()
     toggle_selection(rule, 2, 8, "v5l")
     toggle_selection(rule, 2, 15, "v2l")
     eq({ [[-F -e "it's"]], "-F -e '(busy)'", "-F -e '[1]'" }, hl_section(rule))
+    refresh(rule)
     eq({ "match:1:busy", "hl:1:it's:1", "hl:1:(busy):2", "hl:1:[1]:3" }, highlighted())
 end)
 

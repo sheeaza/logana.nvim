@@ -84,6 +84,10 @@ Pressing `<Enter>` checks each level in turn and only reruns what changed:
 - Otherwise level 2 reruns, but only if `[highlight]` changed.
 - With `opened_only = false`, changes to files under cwd can't be detected, so pressing `<Enter>` without changing anything reruns both levels.
 
+The result buffer is volatile: editing it doesn't refresh anything, and the next refresh
+throws the edits away. Undo is off in it, so each refresh stays fast with a large
+result. Edits meant to last go in the source file.
+
 Level 2 runs only for the lines on screen: each line gets its `[highlight]` colors the
 first time it's drawn, from an rg run over just those lines, so scrolling to new lines
 colors them a moment later.
@@ -115,8 +119,8 @@ and pressing `<Enter>` applies it.
 ### Toggling a highlight
 In the result buffer, select text on one line in visual mode and press `<Enter>`
 (`key.result_toggle_highlight`): `-F -e '<text>'` is added at the end of the rule
-buffer's `[highlight]` section and the colors are refreshed, so the text is matched as
-is, not as a regex. A text with a `'` is put in `"` instead. Doing it again on the same
+buffer's `[highlight]` section, so the text is matched as is, not as a regex. Nothing
+is refreshed: press `<Enter>` in the rule buffer to see the new colors. A text with a `'` is put in `"` instead. Doing it again on the same
 text removes that line. Only lines that are exactly that rule count, patterns inside
 other lines are left alone. If the line can't be written (the text has both quotes) or
 rg rejects it with the section's flags, it warns and adds nothing. The rule buffer is

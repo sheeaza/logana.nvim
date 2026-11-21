@@ -64,7 +64,8 @@ local function rule_buf_of_result(result_buf)
     end
 end
 
--- visual <Enter> in a result buffer: the selected text goes in or out of [highlight]
+-- visual <Enter> in a result buffer: the selected text goes in or out of [highlight].
+-- only the rule buffer is edited, <Enter> there refreshes
 local function toggle_selection_highlight()
     local result_buf = api.nvim_get_current_buf()
     local region = fn.getregion(fn.getpos('v'), fn.getpos('.'), { type = fn.mode() })
@@ -81,11 +82,7 @@ local function toggle_selection_highlight()
         vim.notify("[logana] no rule buffer found for this result", vim.log.levels.INFO)
         return
     end
-    rule.toggle_highlight(rule_buf, region[1], function(changed)
-        if changed ~= nil then
-            refresh.refresh_from_rule(rule_buf)
-        end
-    end)
+    rule.toggle_highlight(rule_buf, region[1], function() end)
 end
 
 local function setup_keybinding()

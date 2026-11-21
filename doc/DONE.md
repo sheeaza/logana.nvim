@@ -270,6 +270,17 @@ From a review of the modules after the split.
   After a refresh the non-result windows are redrawn (`redraw_sources`). `test-500m.log`
   (8.8M lines) in the source window: a screen at the top / middle / end colored in
   2.1 / 2.5 / 2.3 ms, only the drawn rows cached. Wiping a rule buffer redraws them too.
+- [x] Editing from the result buffer doesn't refresh: the user refreshes by hand with
+  `<Enter>` in the rule buffer. Today the visual `<Enter>` toggle edits `[highlight]`
+  and calls `refresh_from_rule` right away (`init.lua`, `toggle_selection_highlight`);
+  it should only edit the rule buffer. Update the README (Toggling a highlight) to match.
+  Edits typed in the result buffer stay as they are (no refresh), and the next refresh
+  throws them away: the result buffer is volatile, edits meant to last go in the source
+  file. Say so in the README.
+  Done: `toggle_selection_highlight` only calls `rule.toggle_highlight`, no
+  `refresh_from_rule`. The toggle tests check the colors stay until a refresh. README:
+  Toggling a highlight says to press `<Enter>` in the rule buffer, Refresh says the
+  result buffer is volatile.
 
 ## Time
 
