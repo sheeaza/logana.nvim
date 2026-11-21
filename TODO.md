@@ -2,12 +2,6 @@
 
 Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 
-## Time
-
-- [ ] Merge several files by timestamp instead of listing them file by file (lnav does
-  this). Needs a timestamp format (config or detected), and rg output comes in file
-  order, so the merge happens after level 1. Design first, measure on `large`.
-
 ## Packaging and docs
 
 - [ ] `doc/logana.txt`: vimdoc help (`:h logana`), from the README.

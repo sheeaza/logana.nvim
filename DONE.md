@@ -270,3 +270,11 @@ From a review of the modules after the split.
   After a refresh the non-result windows are redrawn (`redraw_sources`). `test-500m.log`
   (8.8M lines) in the source window: a screen at the top / middle / end colored in
   2.1 / 2.5 / 2.3 ms, only the drawn rows cached. Wiping a rule buffer redraws them too.
+
+## Time
+
+- [ ] ~~Merge several files by timestamp instead of listing them file by file (lnav does
+  this). Needs a timestamp format (config or detected), and rg output comes in file
+  order, so the merge happens after level 1. Design first, measure on `large`.~~:
+  cancelled, out of scope: leave merging logs to other tools (lnav, `sort -m`), keep
+  logana simple.
