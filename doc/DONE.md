@@ -296,3 +296,8 @@ From a review of the modules after the split.
   `*.logana_result`. Not `test-*.log` (left out on purpose).
 - [x] README install snippet says `"yourname/logana.nvim"`: put the real repo name.
   Done: `"sheeaza/logana.nvim"`.
+- [x] `:checkhealth logana`: LuaJIT, rg found and its version, `posix_spawn` / memfd path
+  available or the fallback in use.
+  Done: `lua/logana/health.lua`. Also warns when `setup()` wasn't called. Without
+  posix_spawn or memfd it's info, not a warning: the fallbacks work, only slower.
+  Test: no error or warning on linux.

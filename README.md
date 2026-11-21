@@ -31,6 +31,10 @@ use({
 `setup()` registers the rule/result filetypes, so load the plugin at startup rather
 than lazily on a command.
 
+`:checkhealth logana` shows whether `setup()` was called, the ripgrep version, and
+which ways of starting rg (`posix_spawn` or `vim.system`) and passing its output
+(memfd or temp files in `stdpath("run")`) are in use.
+
 ## Usage
 
 There is no command. Rule and result buffers are plain files, told apart by extension.
