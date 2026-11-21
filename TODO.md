@@ -31,11 +31,10 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
   586 -> 591 ms (noise); the counts are in 31 / 36 / 57 ms after the refresh. The
   memfd holds a copy of the result texts (shmem, not in `rss_MB`) until the next level
   1 run or the rule buffer is wiped.
-- [ ] Context on demand: the source file's own window is the context, no float.
+- [x] Context on demand: the source file's own window is the context, no float.
   - `<cr>` on a result row: if the source file is not in a window of the current tab,
     keep today's behavior (show it in the result window). If it is, go to that window
     and put the cursor on the row's line / col, with `m'` first so `<C-o>` goes back.
-    Done: `source_win` / `result_buffer_jump` in `result.lua`
   - Follow: moving to another line in the result window moves the cursor of that
     source window too, without leaving the result window. Only when the result line
     changes (not the col, and not on entering the window: `CursorMoved` fires then),
@@ -43,10 +42,16 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
     does not undo it until they move there. Never opens or loads a buffer, no jumplist
   - Several windows on the same file: the first one in `nvim_tabpage_list_wins(0)`
     order, never the result window itself (`override` mode)
-  - The `file:` header of a row: cache the header line numbers when the result is
-    written and binary search them, not `search('^file: ', 'bn')` per cursor move
-    (millions of lines up in a big one-file result)
-  - `result_follow = false` in the config turns follow off
+  - The `file:` header of a row: from the header rows level 1 records, binary
+    searched, not `search('^file: ', 'bn')` per cursor move
+  - `result_win.follow = false` in the config turns follow off
+  Done: `row_source` / `source_win` / `follow` in `result.lua`, the `WinEnter` (records
+  the row, it comes before the `CursorMoved` of entering) and `CursorMoved` autocmds in
+  `init.lua`. The source window is found by full path, `bufnr()` took a pattern
+  (`a.log` also found `ba.log`). The header rows (`st.file_rows`, the folds' rows) are
+  used when no run is loading and the result isn't edited, else `search()`.
+  `test-500m.log`, a 1.1M row result of one file, one follow at rows 2 / 550k / 1.1M:
+  0.04 / 0.02 / 0.02 ms, with `search()` 0.03 / 22 / 44 ms.
 - [ ] Quickfix export: put the result rows in the quickfix / location list (file, line,
   col of the first match), so `:cnext` and pickers work on them.
 

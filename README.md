@@ -8,6 +8,7 @@ Lightweight log analyzer for Neovim. Write ripgrep args under an `[rg]` section 
   2. `[highlight]`: one ripgrep args list per line, matched against the result lines. Each line gets its own color (`LoganaHighlight1..N`).
 - Pressing `<Enter>` in the rule buffer only redoes what's needed (see [Refresh](#refresh)).
 - Pressing `<Enter>` on a result line jumps to that line in the source file: in the source file's window if the current tab has one (the first one), otherwise in the result window.
+- Moving to another line in the result buffer moves the cursor of the source file's window along, if the current tab has one, without leaving the result (`result_win.follow`).
 - Selecting text in the result buffer and pressing `<Enter>` adds it to `[highlight]`, or removes it if it's there (see [Toggling a highlight](#toggling-a-highlight)).
 - Each rule line shows how many result lines it matches (see [Hit counts](#hit-counts)).
 

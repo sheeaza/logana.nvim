@@ -61,6 +61,11 @@ local M = {
         -- 'split': split the rule window, see 'layout'
         -- 'override': show it in the rule window, 'layout' will be ignored
         behavior = 'split',
+
+        -- moving to another line in the result window also moves the cursor of the
+        -- source file's window, if the current tab has one (the first one). false to
+        -- turn off; <Enter> still goes to that window
+        follow = true,
     },
 
     -- file extensions, also used as the filetypes. any file named <name>.<rule> is a

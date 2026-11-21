@@ -804,6 +804,125 @@ test("wiping the rule buffer while loading stops the run", function()
     eq({}, errors, "errors")
 end)
 
+-- -l runs no main loop, so no CursorMoved: these fire what it would. entering a
+-- window fires WinEnter, then CursorMoved even when the cursor didn't move
+local function result_move(row)
+    api.nvim_win_set_cursor(0, { row, 0 })
+    api.nvim_exec_autocmds("CursorMoved", { buffer = api.nvim_get_current_buf() })
+end
+
+local function enter(win)
+    api.nvim_set_current_win(win) -- fires WinEnter
+    api.nvim_exec_autocmds("CursorMoved", { buffer = api.nvim_get_current_buf() })
+end
+
+test("follow: moving in the result moves the source window's cursor, the result keeps focus", function()
+    local rule = setup_session()
+    local src_win = vim.fn.bufwinid("a.log")
+    set_rule(rule, { "-e 'resource'" })
+    refresh(rule)
+    eq({ "file: a.log", "1: cam ERROR resource busy", "3: resource Timeout retry", "" }, result_lines())
+    local res_win = vim.fn.bufwinid(result_buf())
+    enter(res_win)
+    eq({ 1, 0 }, api.nvim_win_get_cursor(src_win), "entering doesn't move it")
+    result_move(3)
+    eq({ 3, 0 }, api.nvim_win_get_cursor(src_win), "row 3")
+    eq(res_win, api.nvim_get_current_win(), "still in the result")
+    result_move(2)
+    eq({ 1, 0 }, api.nvim_win_get_cursor(src_win), "row 2")
+    result_move(1) -- the header: nothing to follow
+    eq({ 1, 0 }, api.nvim_win_get_cursor(src_win), "header")
+end)
+
+test("follow: after moving in the source, going back to the result doesn't undo it", function()
+    local rule = setup_session()
+    local src_win = vim.fn.bufwinid("a.log")
+    set_rule(rule, { "-e 'resource'" })
+    refresh(rule)
+    local res_win = vim.fn.bufwinid(result_buf())
+    enter(res_win)
+    result_move(3)
+    enter(src_win)
+    api.nvim_win_set_cursor(src_win, { 4, 2 })
+    enter(res_win)
+    eq({ 4, 2 }, api.nvim_win_get_cursor(src_win), "kept after going back")
+    result_move(2)
+    eq({ 1, 0 }, api.nvim_win_get_cursor(src_win), "moving in the result follows again")
+end)
+
+-- 1-based result row of the first matched line of file
+local function file_row(file)
+    for i, line in ipairs(result_lines()) do
+        if line == "file: " .. file then
+            return i + 1
+        end
+    end
+end
+
+test("follow: only the file of the row, in its first window; other files' windows are left", function()
+    local rule = setup_session()
+    vim.fn.writefile(LOG, "b.log")
+    vim.fn.writefile(LOG, "ba.log")
+    local a_win = vim.fn.bufwinid("a.log")
+    api.nvim_win_call(a_win, function() vim.cmd("split") end)
+    vim.cmd("split ba.log") -- from the rule window
+    local ba_win = api.nvim_get_current_win()
+    local a_wins = {}
+    for _, win in ipairs(api.nvim_tabpage_list_wins(0)) do
+        if api.nvim_win_get_buf(win) == vim.fn.bufnr("a.log") then
+            table.insert(a_wins, win)
+        end
+    end
+    eq(2, #a_wins, "two a.log windows")
+    set_rule(rule, { "-e 'Timeout'", "a.log", "b.log" }, nil, false)
+    refresh(rule)
+    enter(vim.fn.bufwinid(result_buf()))
+    result_move(file_row("b.log")) -- not shown; ba.log isn't it
+    eq({ 1, 0 }, api.nvim_win_get_cursor(ba_win), "ba.log left")
+    eq({ 1, 0 }, api.nvim_win_get_cursor(a_wins[1]), "a.log left")
+    result_move(file_row("a.log"))
+    eq({ 3, 0 }, api.nvim_win_get_cursor(a_wins[1]), "first a.log window")
+    eq({ 1, 0 }, api.nvim_win_get_cursor(a_wins[2]), "second a.log window left")
+end)
+
+test("follow: the source window scrolls to the line; result_win.follow = false turns it off", function()
+    local rule = setup_session()
+    write_big_log(2000)
+    vim.cmd("checktime")
+    local src_win = vim.fn.bufwinid("a.log")
+    set_rule(rule, { "-e '^1500 '" })
+    refresh(rule)
+    enter(vim.fn.bufwinid(result_buf()))
+    result_move(2)
+    eq({ 1500, 0 }, api.nvim_win_get_cursor(src_win), "cursor")
+    local top = api.nvim_win_call(src_win, function() return vim.fn.line("w0") end)
+    eq(true, top <= 1500 and 1500 < top + api.nvim_win_get_height(src_win), "line on screen")
+
+    L.config.result_win.follow = false
+    local ok, err = pcall(function()
+        result_move(1)
+        result_move(2)
+        api.nvim_win_set_cursor(src_win, { 1, 0 })
+        result_move(1)
+        result_move(2)
+        eq({ 1, 0 }, api.nvim_win_get_cursor(src_win), "off")
+    end)
+    L.config.result_win.follow = true
+    assert(ok, err)
+end)
+
+test("follow: an edited result finds the file header by searching", function()
+    local rule = setup_session()
+    local src_win = vim.fn.bufwinid("a.log")
+    set_rule(rule, { "-e 'resource'" })
+    refresh(rule)
+    local rb = result_buf()
+    api.nvim_buf_set_lines(rb, 0, 0, false, { "my note", "" }) -- the recorded header rows are off now
+    enter(vim.fn.bufwinid(rb))
+    result_move(5)
+    eq({ 3, 0 }, api.nvim_win_get_cursor(src_win), "row 5")
+end)
+
 local failed, total = 0, 0
 for _, t in ipairs(tests) do
     total = total + 1

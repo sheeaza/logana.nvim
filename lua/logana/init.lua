@@ -149,7 +149,19 @@ local function setup_keybinding()
             vim.keymap.set("x", config.key.result_toggle_highlight, toggle_selection_highlight,
                 { buffer = ev.buf, noremap = true, silent = true, desc = "logana: toggle highlight of selection" })
 
-            local group = api.nvim_create_augroup("logana_fold_" .. ev.buf, { clear = true })
+            local group = api.nvim_create_augroup("logana_result_" .. ev.buf, { clear = true })
+            api.nvim_create_autocmd("WinEnter", {
+                group = group,
+                buffer = ev.buf,
+                callback = result.follow_enter,
+                desc = "logana: the result row the cursor entered at",
+            })
+            api.nvim_create_autocmd("CursorMoved", {
+                group = group,
+                buffer = ev.buf,
+                callback = result.follow,
+                desc = "logana: move the source window's cursor with the result's",
+            })
             api.nvim_create_autocmd("BufWinEnter", {
                 group = group,
                 buffer = ev.buf,

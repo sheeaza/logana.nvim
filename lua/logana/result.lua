@@ -79,36 +79,66 @@ local function show_result(rule_buf, result_buf)
     end
 end
 
--- the first window of the current tab showing buf, other than the current one
-local function source_win(buf)
+-- the path in the 'file: ' header above 1-based row of the current (result)
+-- buffer. from the header rows level 1 recorded, when they match the buffer: a
+-- search back from a row of a big one-file result goes over every row above it
+local function header_file(row)
+    -- required here, refresh requires this module
+    local _, st = require('logana.refresh').rule_state_of_result(api.nvim_get_current_buf())
+    local rows = st and not st.job and not st.result_dirty and st.file_rows
+    if rows then
+        -- the last header at or above row
+        local lo, hi = 1, #rows
+        while lo <= hi do
+            local mid = math.floor((lo + hi) / 2)
+            if rows[mid][1] <= row then
+                lo = mid + 1
+            else
+                hi = mid - 1
+            end
+        end
+        return rows[hi] and rows[hi][2]
+    end
+    local fline_num = fn.search('^file: ', 'bnW')
+    if fline_num == 0 then
+        return nil
+    end
+    return fn.getline(fline_num):match("^file: (.+)$")
+end
+
+-- the source of the cursor's row in the current (result) buffer: file, line and
+-- col (0-based) in it; nil and why when the row isn't a matched line
+local function row_source()
+    local line = api.nvim_get_current_line()
+    local lnum_str = line:match("^(%d+):")
+    if not lnum_str then
+        return nil, "not at matched line"
+    end
+    local cursor = api.nvim_win_get_cursor(0)
+    local col = math.max(0, cursor[2] - #lnum_str - 2) -- -2 for ':' and ' '
+    local file = header_file(cursor[1])
+    if not file or file == '' then
+        return nil, "did not find 'file:'"
+    end
+    return file, tonumber(lnum_str), col
+end
+
+-- the first window of the current tab showing file, other than the current one.
+-- by full path: bufnr() takes a pattern, 'a.log' would also find 'ba.log'
+local function source_win(file)
+    local path = fn.fnamemodify(file, ':p')
     local cur = api.nvim_get_current_win()
     for _, win in ipairs(api.nvim_tabpage_list_wins(0)) do
-        if win ~= cur and api.nvim_win_get_buf(win) == buf then
+        if win ~= cur and api.nvim_buf_get_name(api.nvim_win_get_buf(win)) == path then
             return win
         end
     end
 end
 
 local function result_buffer_jump()
-    local line = api.nvim_get_current_line()
-    local lnum_str = line:match("^(%d+):")
-    if not lnum_str then
-        vim.notify("[logana] not at matched line", vim.log.levels.INFO)
-        return
-    end
-    local lnum = tonumber(lnum_str)
-    local cursor = api.nvim_win_get_cursor(0)
-    local col = math.max(0, cursor[2] - #lnum_str - 2) -- -2 for ':' and ' '
-
-    -- reverse search from current line for the file header
-    local fline_num = fn.search('^file: ', 'bn')
-    if fline_num == 0 then
-        vim.notify("[logana] did not find 'file:'", vim.log.levels.INFO)
-        return
-    end
-
-    local file = fn.getline(fline_num):match("^file: (.+)$")
-    if not file or file == '' then
+    local file, lnum, col = row_source()
+    if not file then
+        vim.notify("[logana] " .. lnum, vim.log.levels.INFO)
         return
     end
 
@@ -117,8 +147,7 @@ local function result_buffer_jump()
         return
     end
 
-    local target_buf = fn.bufnr(file)
-    local src_win = target_buf ~= -1 and source_win(target_buf)
+    local src_win = source_win(file)
     if src_win then
         -- the file is already shown in this tab: go there, the result stays
         api.nvim_set_current_win(src_win)
@@ -127,17 +156,42 @@ local function result_buffer_jump()
         return
     end
 
-    if target_buf == -1 then
-        target_buf = fn.bufadd(file)
-        fn.bufload(target_buf)
-    end
-
+    -- an existing buffer of exactly that file, or a new one
+    local target_buf = fn.bufadd(file)
+    fn.bufload(target_buf)
     local win = api.nvim_get_current_win()
     api.nvim_win_set_buf(win, target_buf)
     pcall(api.nvim_win_set_cursor, win, { lnum, col })
 end
 
+-- follow: the result window's cursor moved to another row, move the cursor of the
+-- source file's window in this tab to it too, staying in the result window. only
+-- on a row change, CursorMoved also fires on entering a window: after moving in
+-- the source window, going back to the result doesn't undo it.
+-- (follow_enter records the row on WinEnter, which comes before that CursorMoved)
+local function follow_enter()
+    vim.w.logana_follow_row = api.nvim_win_get_cursor(0)[1]
+end
+
+local function follow()
+    local row = api.nvim_win_get_cursor(0)[1]
+    if vim.w.logana_follow_row == row then
+        return
+    end
+    vim.w.logana_follow_row = row
+    if not config.result_win.follow then
+        return
+    end
+    local file, lnum, col = row_source()
+    local src_win = file and source_win(file)
+    if src_win then
+        pcall(api.nvim_win_set_cursor, src_win, { lnum, col })
+    end
+end
+
 M.get_result_buf = get_result_buf
 M.show_result = show_result
 M.result_buffer_jump = result_buffer_jump
+M.follow_enter = follow_enter
+M.follow = follow
 return M
