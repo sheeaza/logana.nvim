@@ -125,7 +125,7 @@ LD_PRELOAD=/tmp/nomemfd.so nvim --headless -u NONE -l tests/run.lua
 `tests/bench.lua` times one refresh against a real log, split by phase:
 
 ```sh
-nvim --headless -u NONE -l tests/bench.lua <log file or dir> [runs] [--xl]
+nvim --headless -u NONE -l tests/bench.lua <log file or dir> [runs] [--xl] [--save <file> | --gate <file>]
 ```
 
 Each case does one warmup refresh, which fills the page cache and opens the result
@@ -144,7 +144,42 @@ its output into the result lines (`prep` was a separate pass before the third ru
 `max_batch` the longest a single streamed batch blocked Neovim, `level1` until all
 level 1 lines are in, `hl` level 2 (since it's lazy: coloring the rows on one
 screen after the refresh), `save_fold`/`rest_fold` folds,
-`total` the whole refresh (since level 2 is lazy, without it), `rss_MB` resident memory after the case.
+`total` the whole refresh (since level 2 is lazy, without it), `count` from the
+refresh until the hit counts are in (timed by the script; each run waits for them, so
+they don't overlap the next refresh), `rss_MB` resident memory after the case.
+
+### Synthetic log
+
+Without the camera log, `--gen <MB> <file>` writes one of the same shape: ~185-byte
+lines with the cases' patterns at its rates (`small` ~0.034% of the lines, `medium`
+~5%, `large` ~28%, `--xl` ~95%, `start is`/`stop is` ~1% each). The seed is fixed, so
+every machine writes the same file:
+
+```sh
+nvim --headless -u NONE -l tests/bench.lua --gen 500 /tmp/synth.log  # 2.83M lines
+nvim --headless -u NONE -l tests/bench.lua /tmp/synth.log
+```
+
+### Gate
+
+To check a change for slowdowns, save a baseline on the commit before it and gate on
+the change:
+
+```sh
+git checkout <before>
+nvim --headless -u NONE -l tests/bench.lua <log> 5 --save /tmp/base.json
+git checkout <change>
+nvim --headless -u NONE -l tests/bench.lua <log> --gate /tmp/base.json
+```
+
+`--save` writes each case's `res_lines` and medians, and the log's path and size, as
+JSON. `--gate` reruns with the baseline's `runs` (unless given) and exits 1 when
+`first`, `max_batch`, `level1`, `total`, `count` or `rss_MB` of a case is over its
+baseline by more than 15% and 10 ms (`rss_MB`: 15% and 10 MB), printing those cells.
+It exits 2 when the baseline is of another log or a case found a different number of
+lines. The numbers are machine specific, so baselines stay out of the repo. Back to
+back runs of the same commit can differ by ~10% (`large` total on the synthetic log:
+371 / 414 ms with 3 runs), so gate with 5 runs or more.
 
 ### Results
 

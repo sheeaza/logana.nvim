@@ -329,3 +329,18 @@ From a review of the modules after the split.
   `proc.enabled = false` and a preloaded `memfd_create` that fails (how in
   `tests/README.md`): level 1 over a pipe hung on a line over 1 MB, fixed (a pump batch
   always takes a chunk). Test for it with `proc.enabled = false`, in the linux job too.
+- [x] Bench gate: `tests/bench.lua <log> --save <file>` writes the medians per case
+  (`first`, `max_batch`, `level1`, `total`, `rss_MB`, and `count`: until the hit counts
+  are in) to a baseline file; `--gate <file>` reruns and exits 1 when a column of a
+  case is over its baseline by more than 15% and 10 ms (rss: 15% and 10 MB), printing
+  the offending cells. The baseline is machine specific, so it's kept out of the repo:
+  save it on the commit before a change, gate after. A `--gen <MB>` option writes a
+  synthetic log (fixed seed, the cases' patterns at known rates) for a machine without
+  the camera log.
+  Done as written; `count` is timed by the script, and each run now waits for its
+  counts (before, the next refresh stopped them). `--gate` also exits 2 when the
+  baseline is of another log (path, size) or a case's `res_lines` differ. `--gen 500`:
+  2.83M lines in ~4 s, `small`/`medium`/`large`/`xl` 987 / 142k / 793k / 2.69M
+  matches. Checked: the gate passes on the same commit, flags a shrunken baseline
+  (exit 1), refuses another log (exit 2). Noise between back to back runs is ~10%, so
+  gate with 5 runs or more.
