@@ -344,3 +344,10 @@ From a review of the modules after the split.
   matches. Checked: the gate passes on the same commit, flags a shrunken baseline
   (exit 1), refuses another log (exit 2). Noise between back to back runs is ~10%, so
   gate with 5 runs or more.
+- [x] Bench case with a broad [highlight] rule (matching most lines), to see whether the
+  cancelled `collect_highlights` item (`DONE.md`) is worth reopening.
+  Done: `broad` case, `large` with `-e 'Info'` and `-e '[0-9]+'` (every line, digits
+  many times each). Synthetic log, median of 5: `hl` 3 ms (`large` 5), `count` 420 ms
+  (423), `total` 360 (369). Not worth reopening: `collect_highlights` is gone, level 2
+  is lazy (per screen) since, and the counts are rg runs whose time doesn't show the
+  number of matches.

@@ -2,11 +2,6 @@
 
 Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 
-## Robustness
-
-- [ ] Bench case with a broad [highlight] rule (matching most lines), to see whether the
-  cancelled `collect_highlights` item (`DONE.md`) is worth reopening.
-
 ## Low priority, not planned
 
 Hopping match to match (`]h`, `]q`) isn't the intended workflow: the result buffer is

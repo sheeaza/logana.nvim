@@ -153,6 +153,9 @@ local CASES = {
     { name = "small", rg = { "-F", "-e 'ResourceReserve'" } }, -- ~900 matches
     { name = "medium", rg = { "-F", "-e 'DRV_COMMON'" } },     -- ~130k
     { name = "large", rg = { "-F", "-e 'CLIENT_MGR'" } },      -- ~740k
+    -- large with [highlight] rules matching every line: 'Info' once on most, digits
+    -- many times on each, for the level 2 and hit count costs that grow with matches
+    { name = "broad", rg = { "-F", "-e 'CLIENT_MGR'" }, hl = { "-e 'Info'", "-e '[0-9]+'" } },
 }
 if xl then
     table.insert(CASES, { name = "xl", rg = { "-F", "-e 'Info  '" } }) -- ~2.5M
@@ -208,13 +211,13 @@ local function median(t)
     return s[math.ceil(#s / 2)]
 end
 
-local function set_rule(rule_buf, rg)
+local function set_rule(rule_buf, rg, hl)
     local lines = { "[rg]" }
     vim.list_extend(lines, rg)
     -- the target goes after the patterns, as an rg path argument
     table.insert(lines, vim.fn.shellescape(target))
     vim.list_extend(lines, { "[file]", "opened_only = false", "[highlight]" })
-    vim.list_extend(lines, HL)
+    vim.list_extend(lines, hl or HL)
     api.nvim_buf_set_lines(rule_buf, 0, -1, false, lines)
 end
 
@@ -234,7 +237,7 @@ for _, case in ipairs(CASES) do
     vim.fn.chdir(dir)
     vim.cmd("edit 0.logana_rule")
     local rule = api.nvim_get_current_buf()
-    set_rule(rule, case.rg)
+    set_rule(rule, case.rg, case.hl)
 
     samples = nil
     refresh(rule) -- warmup

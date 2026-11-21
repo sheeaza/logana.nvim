@@ -134,7 +134,8 @@ times come from the plugin's `log.trace` timers. Redraw isn't measured, since no
 is attached. The cases search the camera log the numbers below were taken on:
 `small` is `ResourceReserve` (~900 matches), `medium` is `DRV_COMMON` (~130k),
 `large` is `CLIENT_MGR` (~740k), and `--xl` adds `Info  ` (~2.5M). All cases use the
-same three `[highlight]` rules. For another log, edit `CASES` in the script.
+same three `[highlight]` rules, but `broad`: `large` with `-e 'Info'` and `-e '[0-9]+'`,
+matching every line (digits many times each), for the level 2 and hit count costs. For another log, edit `CASES` in the script.
 To time many files, pass a directory, e.g. a log split into ~10k files with
 `split -l 882 -a 5 -d <log> <dir>/f`.
 
@@ -336,4 +337,18 @@ case    res_lines   first   parse   set_lines   max_batch   level1    hl   save_
 small       18824      14      14          24          22      184     6           0          11     195       24
 medium     240813      15      70          69          49      292     6           1          19     315       44
 large     1120484      16     220         191         100      454     6           1          17     472      130
+```
+
+Synthetic log (`--gen 500`, 2.83M lines), with the `count` column and the `broad`
+case, i7-12700, ripgrep 15.2.0, Neovim 0.12 (median of 5). A screen of `broad` (6
+wrapped lines, ~18 ranges each) colors as fast as `large`'s, and its counts take as
+long: level 2 is per screen, the counts are rg runs over the texts, neither grows with
+the number of matches enough to show.
+
+```
+case    res_lines  first  parse  set_lines  max_batch  level1   hl  total  count  rss_MB
+small         989      6      1          0          0      57    4     59     65      17
+medium     141688      8     28         37         12     111    5    113    123      49
+large      793457     16    122        207         57     367    5    369    423     194
+broad      793457     15    117        196         58     358    3    360    420     194
 ```
