@@ -148,7 +148,12 @@ end)
 test(":checkhealth logana reports no error or warning", function()
     vim.cmd("silent! %bwipeout!")
     vim.cmd("silent checkhealth logana")
-    local text = table.concat(api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+    -- nightly fills the buffer asynchronously: wait for the last check (memfd)
+    local buf, text = api.nvim_get_current_buf(), ""
+    vim.wait(5000, function()
+        text = table.concat(api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+        return text:find("memfd", 1, true) ~= nil
+    end, 10)
     vim.cmd("bwipeout!")
     eq(nil, text:find("ERROR") or text:find("WARNING"), "no error or warning:\n" .. text)
     eq(true, text:find("setup() called", 1, true) ~= nil, "setup() seen")
