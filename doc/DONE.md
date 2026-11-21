@@ -289,3 +289,8 @@ From a review of the modules after the split.
   order, so the merge happens after level 1. Design first, measure on `large`.~~:
   cancelled, out of scope: leave merging logs to other tools (lnav, `sort -m`), keep
   logana simple.
+
+## Packaging and docs
+
+- [x] `.gitignore` for local test files at the top level: `*.logana_rule`,
+  `*.logana_result`. Not `test-*.log` (left out on purpose).

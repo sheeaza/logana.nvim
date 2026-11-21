@@ -8,8 +8,6 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 - [ ] README install snippet says `"yourname/logana.nvim"`: put the real repo name.
 - [ ] `:checkhealth logana`: LuaJIT, rg found and its version, `posix_spawn` / memfd path
   available or the fallback in use.
-- [ ] `.gitignore` for local test files (`test-*.log`, `*.logana_rule`, `*.logana_result`
-  at the top level).
 
 ## Robustness
 
