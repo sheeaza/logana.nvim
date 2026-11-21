@@ -68,9 +68,6 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 
 ## Rules from the result
 
-- [ ] Like the highlight toggle: select text in the result, a key adds it to `[rg]` as
-  an exclusion (rg has no per-pattern invert; decide how: a level 1 post-filter, or a
-  separate `[exclude]` section run as a second rg over the result lines).
 - [ ] On a `file: <path>` header, a key adds `-g '!<path>'` to `[rg]` to drop that file.
 
 ## Time

@@ -200,3 +200,7 @@ From a review of the modules after the split.
   empty stdin), a warning and nothing added if it fails. A result buffer that wasn't
   rendered in this session finds its rule buffer by name (`x.logana_result` ->
   `x.logana_rule`, if loaded).
+- [ ] ~~Like the highlight toggle: select text in the result, a key adds it to `[rg]` as
+  an exclusion (rg has no per-pattern invert; decide how: a level 1 post-filter, or a
+  separate `[exclude]` section run as a second rg over the result lines).~~: cancelled,
+  not needed, not practical.
