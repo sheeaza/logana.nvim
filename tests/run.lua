@@ -599,13 +599,28 @@ test("rows on screen get level 2 while level 1 is still loading", function()
     local rule = setup_session()
     write_big_log(60000)
     set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+    -- drawn right after the first write, from a callback queued before the next
+    -- batch. not from vim.wait's condition: once rg is ahead of the scan, the
+    -- batches run back to back and vim.wait only checks it after the last one
+    local scan = require("logana.scan")
+    local orig_read = scan.read_scanned
+    local loading
+    scan.read_scanned = function(...)
+        scan.read_scanned = orig_read
+        orig_read(...)
+        vim.schedule(function()
+            loading = L._busy(rule)
+            vim.cmd("redraw")
+        end)
+    end
     L.refresh(rule)
-    vim.wait(5000, function() return result_buf() ~= -1 and api.nvim_buf_line_count(result_buf()) > 2 end, 1)
-    local loading = L._busy(rule)
-    draw()
-    local h = L._result_highlights[result_buf()].hl[1][1]
-    eq("busy", result_lines()[2]:sub(h[1] + 1, h[2]))
+    vim.wait(5000, function() return loading ~= nil end, 1)
+    scan.read_scanned = orig_read
     eq(true, loading, "drawn while loading")
+    local hls = L._result_highlights[result_buf()]
+    vim.wait(5000, function() return hls.pending == 0 end, 1)
+    local h = hls.hl[1][1]
+    eq("busy", result_lines()[2]:sub(h[1] + 1, h[2]))
     vim.wait(5000, function() return not L._busy(rule) end, 1)
     eq(h, L._result_highlights[result_buf()].hl[1][1], "kept when loading is done")
 end)
