@@ -5,7 +5,6 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 ## Packaging and docs
 
 - [ ] `doc/logana.txt`: vimdoc help (`:h logana`), from the README.
-- [ ] README install snippet says `"yourname/logana.nvim"`: put the real repo name.
 - [ ] `:checkhealth logana`: LuaJIT, rg found and its version, `posix_spawn` / memfd path
   available or the fallback in use.
 

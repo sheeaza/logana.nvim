@@ -294,3 +294,5 @@ From a review of the modules after the split.
 
 - [x] `.gitignore` for local test files at the top level: `*.logana_rule`,
   `*.logana_result`. Not `test-*.log` (left out on purpose).
+- [x] README install snippet says `"yourname/logana.nvim"`: put the real repo name.
+  Done: `"sheeaza/logana.nvim"`.

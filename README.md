@@ -11,7 +11,7 @@ Needs Neovim built with LuaJIT (the default) and ripgrep.
 lazy.nvim:
 ```lua
 {
-    "yourname/logana.nvim",
+    "sheeaza/logana.nvim",
     config = function()
         require("logana").setup({})
     end,
@@ -21,7 +21,7 @@ lazy.nvim:
 packer.nvim:
 ```lua
 use({
-    "yourname/logana.nvim",
+    "sheeaza/logana.nvim",
     config = function()
         require("logana").setup({})
     end,
