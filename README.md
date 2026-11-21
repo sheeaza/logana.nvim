@@ -111,8 +111,8 @@ colors them a moment later.
 - Select text on one line in visual mode and press `<Enter>`: `-F -e '<text>'` is added
   at the end of `[highlight]` (in `"` if the text has a `'`), matched as is, not as a
   regex. Doing it again on the same text removes that line; only lines that are
-  exactly that rule count. Nothing is refreshed: press `<Enter>` in the rule buffer to
-  see the colors. If the line can't be written (the text has both quotes) or rg
+  exactly that rule count. The colors follow right away: only `[highlight]` reruns,
+  not `[rg]` or `[fold]` even if they were edited, and edits in the result are kept. If the line can't be written (the text has both quotes) or rg
   rejects it with the section's flags, it warns and adds nothing.
 - The result buffer is volatile: editing it doesn't refresh anything, and the next
   refresh throws the edits away. Undo is off in it, so each refresh stays fast with a

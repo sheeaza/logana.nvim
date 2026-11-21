@@ -386,6 +386,34 @@ local function refresh_from_rule(rule_buf, on_done)
     finish_refresh(rule_buf, st, ropts, false, fold_edited, t_all, on_done)
 end
 
+-- visual <Enter> in the result: level 2 starts over with the rule buffer's
+-- [highlight], like a refresh where only it changed. nothing else reruns, even
+-- with [rg] or [fold] edited (the next refresh does) or the result edited
+local function refresh_highlight(rule_buf)
+    local st = RULE_STATE[rule_buf]
+    local ropts = rule.get_runtime_opts(rule_buf)
+    if not st or not ropts then
+        return
+    end
+    if st.job then
+        -- level 1 still loading: it takes [highlight] from job.ropts, keep its [rg] and [fold]
+        st.job.ropts = vim.tbl_extend('force', st.job.ropts,
+            { hl_rules = ropts.hl_rules, hl_sig = ropts.hl_sig, hl_counts = ropts.hl_counts })
+        count.place(rule_buf, st, 'hl', ropts.hl_counts)
+        return
+    end
+    local hls = st.result_buf and highlight.by_buf[st.result_buf]
+    if not hls or st.hl_sig == ropts.hl_sig then
+        return
+    end
+    highlight.reset_highlights(hls, ropts)
+    st.hl_sig, st.hl_rules, st.hl_warned = ropts.hl_sig, hls.hl_rules, hls.warned
+    pcall(api.nvim__redraw, { buf = st.result_buf, valid = false })
+    highlight.redraw_sources()
+    count.place(rule_buf, st, 'hl', ropts.hl_counts)
+    count.start(rule_buf, st, 'hl')
+end
+
 -- buf was wiped: drop what's kept for it as a rule or a result buffer, and stop
 -- its level 1 run, which would apply [fold] from the wiped rule buffer at the end
 local function forget(buf)
@@ -413,5 +441,6 @@ end
 M.state = RULE_STATE
 M.forget = forget
 M.refresh_from_rule = refresh_from_rule
+M.refresh_highlight = refresh_highlight
 M.rule_state_of_result = rule_state_of_result
 return M
