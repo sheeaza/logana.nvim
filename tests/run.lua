@@ -680,6 +680,73 @@ test("CRLF log: the '\\r' is dropped from the result lines, columns and counts",
     eq({ [3] = "1" }, counts(rule), "--crlf: '$' counted")
 end)
 
+test("invalid utf-8: level 2 and the hit counts work on the line", function()
+    local rule = setup_session()
+    -- not at the start of the file: rg reads a leading \255\254 as a UTF-16 BOM
+    vim.fn.writefile({ "x\255\254 busy \255 retry", "ok busy" }, "a.log")
+    vim.cmd("checktime")
+    set_rule(rule, { "-e 'busy'" }, { "-e 'retry'", "-e 'busy'" })
+    refresh(rule)
+    eq({ "file: a.log", "1: x\255\254 busy \255 retry", "2: ok busy", "" }, result_lines())
+    eq({ "match:1:busy", "hl:1:retry:1", "hl:1:busy:2", "match:2:busy", "hl:2:busy:2" }, highlighted())
+    eq({ [2] = "2", [6] = "1", [7] = "2" }, counts(rule))
+end)
+
+test("a very long line: listed whole, with its columns", function()
+    local rule = setup_session()
+    local long = ("x"):rep(2 * 1024 * 1024) .. " busy " .. ("y"):rep(1000) .. " retry"
+    vim.fn.writefile({ long, "short busy" }, "a.log")
+    vim.cmd("checktime")
+    set_rule(rule, { "-e 'busy'" }, { "-e 'retry'" })
+    refresh(rule)
+    local lines = result_lines()
+    eq(4, #lines, "line count")
+    eq("1: " .. long, lines[2], "the long line")
+    eq({ "match:1:busy", "hl:1:retry:1", "match:2:busy" }, highlighted())
+    eq({ [2] = "2", [6] = "1" }, counts(rule))
+end)
+
+test("paths with spaces and ':': listed, jumped to, folded", function()
+    local rule = setup_session()
+    vim.fn.writefile({ "sp busy" }, "a b.log")
+    vim.fn.writefile({ "co busy" }, "c:d.log")
+    vim.fn.writefile({ "c2 busy" }, "e:3:x.log")
+    vim.cmd("wincmd p | edit a\\ b.log | edit c:d.log | edit e:3:x.log | wincmd p")
+    set_rule(rule, { "-e 'busy'" })
+    api.nvim_buf_set_lines(rule, -1, -1, false, { "[fold]", "a b.log" })
+    refresh(rule)
+    -- rg lists the files in any order
+    local rows = {}
+    for row, line in ipairs(result_lines()) do
+        local path = line:match("^file: (.*)")
+        if path then
+            rows[path] = row
+        end
+    end
+    local paths = vim.tbl_keys(rows)
+    table.sort(paths)
+    eq({ "a b.log", "a.log", "c:d.log", "e:3:x.log" }, paths, "headers")
+    local win = vim.fn.bufwinid(result_buf())
+    eq(rows["a b.log"], api.nvim_win_call(win, function() return vim.fn.foldclosed(rows["a b.log"]) end),
+        "[fold] path with a space")
+    for _, path in ipairs({ "c:d.log", "e:3:x.log" }) do
+        result_jump(rows[path] + 1, 3)
+        eq(path, vim.fn.fnamemodify(api.nvim_buf_get_name(0), ":."), "jumped to " .. path)
+        eq({ 1, 0 }, api.nvim_win_get_cursor(0), "cursor in " .. path)
+        api.nvim_win_set_buf(win, result_buf()) -- a source not shown opens in the result window
+    end
+end)
+
+test("paths with spaces and ':' with opened_only = false", function()
+    local rule = setup_session()
+    vim.fn.writefile({ "sp busy" }, "a b.log")
+    vim.fn.writefile({ "co busy" }, "c:d.log")
+    set_rule(rule, { "-e 'busy'", "--sort path" }, {}, false)
+    refresh(rule)
+    eq({ "file: a b.log", "1: sp busy", "", "file: a.log", "1: cam ERROR resource busy", "",
+        "file: c:d.log", "1: co busy", "" }, result_lines())
+end)
+
 -- a log big enough that level 1 output arrives in many batches
 local function write_big_log(n)
     local lines = {}
@@ -773,6 +840,41 @@ test("only [highlight] changed while loading: the run goes on and uses the new r
     draw()
     local h = L._result_highlights[result_buf()].hl[1][1]
     eq("busy", result_lines()[2]:sub(h[1] + 1, h[2]))
+end)
+
+test("rule buffer emptied while loading: the load ends without error", function()
+    local rule = setup_session()
+    write_big_log(60000)
+    set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+    L.refresh(rule)
+    eq(true, L._busy(rule), "loading")
+    vim.v.errmsg = ""
+    api.nvim_buf_set_lines(rule, 0, -1, false, {})
+    vim.wait(5000, function() return not L._busy(rule) end, 1)
+    eq(60000 + 2, #result_lines(), "line count")
+    eq({}, counts(rule), "no count marks")
+    eq("", vim.v.errmsg, "no error")
+end)
+
+test("[fold] added while loading: applied when it's done", function()
+    local rule = setup_session()
+    write_big_log(60000)
+    vim.fn.writefile({ "b resource" }, "b.log")
+    vim.cmd("wincmd p | edit b.log | wincmd p")
+    set_rule(rule, { "-e 'resource'" })
+    L.refresh(rule)
+    eq(true, L._busy(rule), "loading")
+    api.nvim_buf_set_lines(rule, -1, -1, false, { "[fold]", "b.log" })
+    vim.wait(5000, function() return not L._busy(rule) end, 1)
+    local row
+    for r, line in ipairs(result_lines()) do
+        if line == "file: b.log" then
+            row = r
+        end
+    end
+    local win = vim.fn.bufwinid(result_buf())
+    eq(row, api.nvim_win_call(win, function() return vim.fn.foldclosed(row) end), "b.log folded")
+    eq({ "[fold]", "b.log" }, api.nvim_buf_get_lines(rule, -3, -1, false), "[fold] kept")
 end)
 
 test("context lines don't make level 1 parsing slow", function()

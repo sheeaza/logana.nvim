@@ -4,8 +4,6 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 
 ## Robustness
 
-- [ ] Tests for edge cases: CRLF logs, invalid UTF-8, very long lines, paths with spaces
-  or `:`, editing the rule buffer while level 1 is loading.
 - [ ] CI job on macOS, so the path without `posix_spawn` (`vim.system` and the pipe) and
   without memfd (temp file in `stdpath('run')`) is tested.
 - [ ] Bench gate: `tests/bench.lua <log> --save <file>` writes the medians per case

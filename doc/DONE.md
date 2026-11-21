@@ -305,3 +305,20 @@ From a review of the modules after the split.
   Done: same sections as the README (Install, Usage, Config, API, plus Health), a tag
   per section, config option and highlight group. A README change needs the same one
   there. `/doc/tags` (made by `:helptags`) in `.gitignore`.
+
+## Robustness
+
+- [x] Tests for edge cases: CRLF logs, invalid UTF-8, very long lines, paths with spaces
+  or `:`, editing the rule buffer while level 1 is loading.
+  Found and fixed:
+  - hit count marks were set when level 1 ended, on the line numbers parsed when it
+    started: an edit while loading put them on the wrong lines. Now placed at the
+    start (`count.place`), filled in at the end (`count.start`)
+  - CRLF lines kept their `\r` (`^M` in the result, `[highlight]` `$` not matching
+    while the `ff=dos` source window did). Now dropped in `scan_batch`, a match ending
+    on it cut. Same timing on `test-1g.log` (450k lines, within noise). A hit count of
+    an `[rg]` pattern matching the `\r` itself is 0 (the counts run on the stripped texts)
+  Already fine, now tested: invalid UTF-8 in level 2 and the counts (a file starting
+  with `\xff\xfe` is read by rg as UTF-16), a 2 MB line, paths with spaces and `:`
+  (headers, jump, `[fold]`, `opened_only = false`), the rule buffer emptied or
+  `[fold]` added while loading.
