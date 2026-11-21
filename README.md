@@ -117,6 +117,10 @@ colors them a moment later.
 - The result buffer is volatile: editing it doesn't refresh anything, and the next
   refresh throws the edits away. Undo is off in it, so each refresh stays fast with a
   large result. Edits meant to last go in the source file.
+- CRLF logs: the `\r` at the end of each line is dropped, as in a buffer read with
+  `ff=dos`, so `[highlight]` and the source window's colors see the same text. `$` in
+  `[rg]` still needs rg's `--crlf`. A hit count of an `[rg]` pattern matching the `\r`
+  itself (`\s$` without `--crlf`) is 0.
 
 ### Folding
 

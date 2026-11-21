@@ -641,6 +641,45 @@ test("level 1 skips -A/-B context lines and keeps lines that aren't utf-8", func
     eq({ "match:1:busy" }, highlighted())
 end)
 
+-- writes a.log as is (writefile would add '\n' after the last line only), rereads it
+local function write_raw_log(data)
+    local f = assert(io.open("a.log", "wb"))
+    f:write(data)
+    f:close()
+    vim.cmd("checktime")
+end
+
+test("CRLF log: the '\\r' is dropped from the result lines, columns and counts", function()
+    local rule = setup_session()
+    write_raw_log("cam busy one\r\nfoo\r\nretry busy\r\n")
+    -- 'one\s$' and 'y\x0d' end on the '\r'; '\x0d' alone is only the '\r'
+    set_rule(rule, { "-e 'one\\s$'", "-e 'y\\x0d'", "-e 'foo\\x0d'" }, { "-e 'busy$'" })
+    refresh(rule)
+    eq({ "file: a.log", "1: cam busy one", "2: foo", "3: retry busy", "" }, result_lines())
+    eq({
+        "match:1:one",
+        "match:2:foo",
+        "match:3:y", "hl:3:busy:1",
+    }, highlighted())
+    -- lines: 1 [rg], 2-4, 5 [file], 6, 7 [highlight], 8
+    -- the counts run on the result texts, without the '\r': a pattern matching
+    -- the '\r' itself counts 0 (with --crlf '$' is fine, below)
+    eq({ [2] = "0", [3] = "0", [4] = "0", [8] = "1" }, counts(rule))
+    result_jump(4, 9) -- on "busy"
+    eq({ 3, 6 }, api.nvim_win_get_cursor(0), "source cursor")
+
+    set_rule(rule, { "-e '\\x0d'" })
+    refresh(rule)
+    eq({ "file: a.log", "1: cam busy one", "2: foo", "3: retry busy", "" }, result_lines())
+    eq({}, highlighted(), "a match of only the '\\r' is dropped")
+
+    set_rule(rule, { "--crlf", "-e 'busy$'" })
+    refresh(rule)
+    eq({ "file: a.log", "3: retry busy", "" }, result_lines())
+    eq({ "match:1:busy" }, highlighted())
+    eq({ [3] = "1" }, counts(rule), "--crlf: '$' counted")
+end)
+
 -- a log big enough that level 1 output arrives in many batches
 local function write_big_log(n)
     local lines = {}

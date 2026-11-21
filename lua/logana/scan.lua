@@ -146,6 +146,19 @@ local function scan_batch(p, data, n)
                     end
                     i = mk + 1
                 end
+                -- a CRLF log's '\r' is dropped, as a buffer read with ff=dos does:
+                -- no ^M, and level 2 and the hit counts see the same text as the
+                -- source window. a match ending on it (only \s$-like patterns) is
+                -- cut, or dropped if it was only the '\r'
+                if o > ts and out[o - 1] == 13 then
+                    o = o - 1
+                    if nc > start[row] and cols[nc - 1] > o - lo then
+                        cols[nc - 1] = o - lo
+                        if cols[nc - 2] >= cols[nc - 1] then
+                            nc = nc - 2
+                        end
+                    end
+                end
                 out[o], o, row, k = 10, o + 1, row + 1, k + 1
                 if texts then
                     ffi.copy(txt + to, out + ts, o - ts)
