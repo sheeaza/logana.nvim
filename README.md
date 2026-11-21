@@ -136,13 +136,13 @@ rules. `highlight.hl_buf = false` turns it off.
 ### Hit counts
 
 After a refresh, the end of each `[rg]` line with a `-e`/`-f` and each colored
-`[highlight]` line shows how many result lines it matches, in that rule's color
-(` … ` while counting, `!` if rg failed). Every result line is counted, not only the
-ones drawn. The flag-only lines of the section are shared by every rule; in `[rg]`,
-lines without a pattern (e.g. `-g '*.log'`, paths) aren't counted. For a line with
-several patterns, the count is of the lines matching any of them. The counts move with
-edits to the rule buffer and are updated on the next refresh. `hit_count = false`
-turns them off.
+`[highlight]` line shows how many result lines it matches, in that rule's color (` … `
+while loading and counting, `!` if rg failed). Every result line is counted, not only
+the ones drawn. The flag-only lines of the section are shared by every rule; in
+`[rg]`, lines without a pattern (e.g. `-g '*.log'`, paths) aren't counted. For a line
+with several patterns, the count is of the lines matching any of them. The counts move
+with edits to the rule buffer, also ones made while loading, and are updated on the
+next refresh. `hit_count = false` turns them off.
 
 ## Config
 

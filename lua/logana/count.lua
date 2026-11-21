@@ -51,55 +51,72 @@ local function stop_all(rule_buf, st)
     stop(rule_buf, st, 'hl')
 end
 
--- counts rules ({ args, lnum, group }, see rule.lua) over st.texts, replacing the
--- counts of that kind. nothing when turned off or there are no texts
-local function run(rule_buf, st, kind, rules)
+-- puts a ' … ' mark on the line of each rule ({ args, lnum, group }, see rule.lua),
+-- replacing the counts of that kind. placed when the rule buffer is parsed, so the
+-- marks follow edits made before start() runs (while level 1 loads). nothing when
+-- turned off
+local function place(rule_buf, st, kind, rules)
     stop(rule_buf, st, kind)
-    local texts = st.texts
-    if not config.hit_count or #rules == 0 or not texts or texts.failed
-        or not api.nvim_buf_is_valid(rule_buf) then
+    if not config.hit_count or #rules == 0 or not api.nvim_buf_is_valid(rule_buf) then
         return
     end
-    local c = { marks = {}, procs = {}, left = 0 }
+    local c = { marks = {}, procs = {}, left = 0, rules = rules }
     st.counts = st.counts or {}
     st.counts[kind] = c
     local line_count = api.nvim_buf_line_count(rule_buf)
-
     for i, r in ipairs(rules) do
         if r.lnum <= line_count then
             local ok, id = pcall(api.nvim_buf_set_extmark, rule_buf, NS, r.lnum - 1, 0, mark_opts(' … ', 'Comment'))
             if ok then
                 c.marks[i] = id
-                local args = { config.rg.cmd, '--color', 'never', '--no-filename' }
-                vim.list_extend(args, r.args)
-                vim.list_extend(args, { '--count', texts.path })
-                c.left = c.left + 1
-                local ran, proc = pcall(process.system, args, { text = true }, function(res)
-                    vim.schedule(function()
-                        if st.counts == nil or st.counts[kind] ~= c then
-                            return
-                        end
-                        c.procs[i] = nil
-                        c.left = c.left - 1
-                        if not api.nvim_buf_is_valid(rule_buf) then
-                            return
-                        end
-                        -- rg exits 1 when nothing matched
-                        local n = res.code == 0 and res.stdout:match('%d+') or (res.code == 1 and '0')
-                        if n then
-                            update_mark(rule_buf, id, ' ' .. n .. ' ', r.group)
-                        else
-                            update_mark(rule_buf, id, ' ! ', 'WarningMsg')
-                        end
-                    end)
-                end)
-                if ran then
-                    c.procs[i] = proc
+            end
+        end
+    end
+end
+
+-- counts the placed rules of that kind over st.texts, once per place(). without
+-- texts the marks are removed
+local function start(rule_buf, st, kind)
+    local c = st.counts and st.counts[kind]
+    if not c or c.started then
+        return
+    end
+    local texts = st.texts
+    if not texts or texts.failed or not api.nvim_buf_is_valid(rule_buf) then
+        stop(rule_buf, st, kind)
+        return
+    end
+    c.started = true
+    for i, id in pairs(c.marks) do
+        local r = c.rules[i]
+        local args = { config.rg.cmd, '--color', 'never', '--no-filename' }
+        vim.list_extend(args, r.args)
+        vim.list_extend(args, { '--count', texts.path })
+        c.left = c.left + 1
+        local ran, proc = pcall(process.system, args, { text = true }, function(res)
+            vim.schedule(function()
+                if st.counts == nil or st.counts[kind] ~= c then
+                    return
+                end
+                c.procs[i] = nil
+                c.left = c.left - 1
+                if not api.nvim_buf_is_valid(rule_buf) then
+                    return
+                end
+                -- rg exits 1 when nothing matched
+                local n = res.code == 0 and res.stdout:match('%d+') or (res.code == 1 and '0')
+                if n then
+                    update_mark(rule_buf, id, ' ' .. n .. ' ', r.group)
                 else
-                    c.left = c.left - 1
                     update_mark(rule_buf, id, ' ! ', 'WarningMsg')
                 end
-            end
+            end)
+        end)
+        if ran then
+            c.procs[i] = proc
+        else
+            c.left = c.left - 1
+            update_mark(rule_buf, id, ' ! ', 'WarningMsg')
         end
     end
 end
@@ -115,7 +132,8 @@ local function busy(st)
 end
 
 M.ns = NS
-M.run = run
+M.place = place
+M.start = start
 M.stop = stop
 M.stop_all = stop_all
 M.busy = busy

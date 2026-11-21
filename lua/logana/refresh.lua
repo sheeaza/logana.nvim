@@ -75,11 +75,14 @@ local function finish_refresh(rule_buf, st, ropts, rerendered, fold_edited, t_al
     if hl_changed or rerendered then
         highlight.redraw_sources()
     end
-    if rerendered then
-        count.run(rule_buf, st, 'rg', ropts.rg_counts)
+    -- after a level 1 run, the marks were placed when it started (or, for
+    -- [highlight], when a refresh changed it while loading)
+    if hl_changed and not rerendered then
+        count.place(rule_buf, st, 'hl', ropts.hl_counts)
     end
     if rerendered or hl_changed then
-        count.run(rule_buf, st, 'hl', ropts.hl_counts)
+        count.start(rule_buf, st, 'rg')
+        count.start(rule_buf, st, 'hl')
     end
 
     if rerendered or fold_edited then
@@ -119,8 +122,10 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
     job.stop_spinner = spinner.start_spinner(rule_buf, job)
     -- an interrupted or failed run leaves a partial buffer, the next refresh reruns
     st.match_sig = nil
-    -- the old counts and texts are of the old result
-    count.stop_all(rule_buf, st)
+    -- the old counts and texts are of the old result. the new marks go on the
+    -- rule lines now, so they move with edits made while loading
+    count.place(rule_buf, st, 'rg', ropts.rg_counts)
+    count.place(rule_buf, st, 'hl', ropts.hl_counts)
     if st.texts then
         scan.close_texts(st.texts)
     end
@@ -139,6 +144,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
             vim.notify(("[logana] ripgrep error for: %s"):format(res.stderr or "exit code 2"), vim.log.levels.WARN)
         end
         if not job.started then
+            count.stop_all(rule_buf, st)
             if res.code == 1 then
                 vim.notify(("[logana] cmd[%s], no match found"):format(table.concat(ropts.args_common, ' ')),
                     vim.log.levels.INFO)
@@ -343,6 +349,7 @@ local function refresh_from_rule(rule_buf, on_done)
     if st.job and st.job.sig == ropts.match_sig then
         st.job.ropts = ropts
         st.job.on_done = on_done
+        count.place(rule_buf, st, 'hl', ropts.hl_counts)
         return
     end
     if st.job then

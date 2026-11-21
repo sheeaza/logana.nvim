@@ -430,6 +430,35 @@ test("hit counts cover every result line, also of a streamed level 1", function(
     eq({ [2] = "200000", [6] = "100000", [7] = "200000" }, counts(rule))
 end)
 
+test("hit counts: edits to the rule buffer while level 1 loads move the marks", function()
+    local rule = setup_session()
+    local lines = {}
+    for i = 1, 60000 do
+        lines[i] = ("%d resource line padded to be long enough %s busy"):format(i, ("x"):rep(40))
+    end
+    vim.fn.writefile(lines, "a.log")
+    vim.cmd("checktime")
+    -- lines: 1 [rg], 2, 3 [file], 4, 5 [highlight], 6, 7
+    set_rule(rule, { "-e 'resource'" }, { "-e 'busy'", "-e 'padded'" })
+    L.refresh(rule)
+    eq(true, L._busy(rule), "loading")
+    api.nvim_buf_set_lines(rule, 0, 0, false, { "# a comment", "" })
+    api.nvim_buf_set_lines(rule, -2, -1, false, {}) -- deletes the 'padded' line
+    vim.wait(5000, function() return not L._busy(rule) end, 1)
+    eq({ [4] = "60000", [8] = "60000" }, counts(rule), "on the moved lines, none on the deleted one")
+
+    -- a [highlight] change while loading: its marks are put on the lines of then
+    api.nvim_buf_set_lines(rule, 3, 4, false, { "-e 'resource line'" })
+    L.refresh(rule)
+    eq(true, L._busy(rule), "loading again")
+    api.nvim_buf_set_lines(rule, -2, -1, false, { "-e '^1'" })
+    L.refresh(rule)
+    eq(true, L._busy(rule), "still loading")
+    api.nvim_buf_set_lines(rule, 0, 0, false, { "# another" })
+    vim.wait(5000, function() return not L._busy(rule) end, 1)
+    eq({ [5] = "60000", [9] = "11111" }, counts(rule), "new [highlight] rule counted")
+end)
+
 test("hit counts: hit_count = false shows none", function()
     local rule = setup_session()
     L.config.hit_count = false
