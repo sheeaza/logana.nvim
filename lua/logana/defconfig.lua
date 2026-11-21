@@ -38,8 +38,8 @@ local M = {
     hit_count = true,
 
     highlight = {
-        -- true: [highlight] colors also in the windows of a result's source files in
-        -- the same tab, for the lines on screen ([rg] colors only in the result)
+        -- true: [highlight] colors also in the windows of a result's source files,
+        -- from their rule buffer, for the lines on screen ([rg] colors only in the result)
         hl_buf = true,
         hl_result = true,-- true: highlight for result buffers. false: ...
     },

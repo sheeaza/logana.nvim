@@ -936,7 +936,7 @@ end
 -- draws the screen and waits for the source buffer's level 2; returns
 -- { "hl:<row>:<text>:<hl_idx>", ... }, or nil when it has none
 local function source_highlighted(file)
-    vim.cmd("redraw")
+    vim.cmd("redraw!") -- every window, also those nothing changed in
     local b = vim.fn.bufnr(file)
     local hls = L._source_highlights[b]
     if not hls then
@@ -999,7 +999,7 @@ test("source window: new [highlight] rules or an edit of the source start it ove
     end)
 end)
 
-test("source window: none for a file that isn't a source, or with the result in another tab", function()
+test("source window: none for a file that isn't a source", function()
     with_source(function()
         local rule = setup_session()
         vim.fn.writefile(LOG, "b.log")
@@ -1009,19 +1009,46 @@ test("source window: none for a file that isn't a source, or with the result in 
         eq({ "file: a.log", "1: cam ERROR resource busy", "3: resource Timeout retry", "" }, result_lines())
         eq({ "hl:0:busy:1" }, source_highlighted("a.log"))
         eq(nil, source_highlighted("b.log"), "b.log isn't searched")
+    end)
+end)
 
+test("source window: bound to the rule buffer, kept in another tab and without the result", function()
+    with_source(function()
+        local rule = setup_session()
+        set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+        refresh(rule)
         local a = vim.fn.bufnr("a.log")
         vim.cmd("tabnew")
         api.nvim_set_current_buf(a)
-        L._source_highlights[a] = nil
-        eq(nil, source_highlighted("a.log"), "no result in this tab")
-        vim.cmd("tabprevious")
-        eq({ "hl:0:busy:1" }, source_highlighted("a.log"), "back in the result's tab")
+        L._source_highlights[a] = nil -- asked for again, from this tab
+        eq({ "hl:0:busy:1" }, source_highlighted("a.log"), "another tab, no result in it")
+        vim.cmd("tabclose")
+
         api.nvim_win_close(vim.fn.bufwinid(result_buf()), true)
-        vim.wait(100, function() return false end, 1) -- the scheduled redraw
         L._source_highlights[a] = nil
-        eq(nil, source_highlighted("a.log"), "result window closed")
-        vim.cmd("tabonly")
+        eq({ "hl:0:busy:1" }, source_highlighted("a.log"), "result window closed")
+        vim.cmd("bwipeout! " .. result_buf())
+        L._source_highlights[a] = nil
+        eq({ "hl:0:busy:1" }, source_highlighted("a.log"), "result buffer wiped")
+
+        vim.cmd("bwipeout! " .. rule)
+        eq(nil, source_highlighted("a.log"), "rule buffer wiped")
+    end)
+end)
+
+test("source window: of two rule buffers, the last refreshed gives the rules", function()
+    with_source(function()
+        local rule = setup_session()
+        set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+        refresh(rule)
+        vim.cmd("split 1.logana_rule")
+        local rule2 = api.nvim_get_current_buf()
+        set_rule(rule2, { "-e 'hardware'" }, { "-e 'Timeout'" })
+        refresh(rule2)
+        eq({ "hl:2:Timeout:1" }, source_highlighted("a.log"), "the second")
+        set_rule(rule, { "-e 'resource'" }, { "-e 'busy'", "-e 'ok'" })
+        refresh(rule)
+        eq({ "hl:0:busy:1", "hl:1:ok:2" }, source_highlighted("a.log"), "the first again")
     end)
 end)
 

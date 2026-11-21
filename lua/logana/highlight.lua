@@ -27,9 +27,9 @@ local NS_MATCH = api.nvim_create_namespace("logana.match")
 -- since eagerly creating one extmark per match makes the first redraw of a large
 -- result buffer (hundreds of thousands of matches) take seconds.
 local RESULT_HIGHLIGHTS = {}
--- level 2 of source files shown next to a result, per source buffer: like a result's
+-- level 2 of the source files of a result, per source buffer: like a result's
 -- hl / hl_rules / warned / pending / busy / queued, plus src = true, from = <the
--- result's highlights it took the rules from>, tick = <the buffer's changedtick>
+-- rule buffer's state it took the rules from>, tick = <the buffer's changedtick>
 local SOURCE_HIGHLIGHTS = {}
 -- window -> the source highlights on_win picked for it, for on_line in the same redraw
 local WIN_SOURCE = {}
@@ -98,10 +98,12 @@ local function has_source(rows, path)
     return p.set[path] == true
 end
 
--- the source highlights of a buffer drawn in win, or nil: it must be a source of a
--- result shown in win's tab, the first such result window gives the rules. started
+-- the source highlights of a buffer, or nil: it must be a source of a rule buffer's
+-- result (a 'file:' header of it), bound to that rule buffer, not to a window: it
+-- keeps its colors in any tab, also with the result closed or wiped, until the rule
+-- buffer is. of several, the last refreshed rule buffer gives the rules. started
 -- over when those rules change, or the buffer does (edits, :e)
-local function source_highlights(win, bufnr)
+local function source_highlights(bufnr)
     if not config.highlight.hl_buf or api.nvim_get_option_value('buftype', { buf = bufnr }) ~= '' then
         return nil
     end
@@ -109,22 +111,17 @@ local function source_highlights(win, bufnr)
     if path == '' then
         return nil
     end
-    local refresh = require('logana.refresh') -- it requires this module
     local from
-    for _, w in ipairs(api.nvim_tabpage_list_wins(api.nvim_win_get_tabpage(win))) do
-        local rb = api.nvim_win_get_buf(w)
-        local res = RESULT_HIGHLIGHTS[rb]
-        if res then
-            local _, st = refresh.rule_state_of_result(rb)
-            -- while level 1 loads, the headers it found so far
-            local rows = st and (st.job and st.job.parser.file_rows or st.file_rows)
-            if rows and has_source(rows, path) then
-                from = res
-                break
-            end
+    for rule_buf, st in pairs(require('logana.refresh').state) do -- it requires this module
+        -- while level 1 loads, the headers it found so far
+        local rows = st.job and st.job.parser.file_rows or st.file_rows
+        if rows and st.hl_rules and (not from or st.bound > from.bound)
+            and api.nvim_buf_is_valid(rule_buf) and has_source(rows, path) then
+            from = st
         end
     end
     if not from or #from.hl_rules == 0 then
+        SOURCE_HIGHLIGHTS[bufnr] = nil -- e.g. its rule buffer was wiped
         return nil
     end
     local tick = api.nvim_buf_get_changedtick(bufnr)
@@ -132,7 +129,7 @@ local function source_highlights(win, bufnr)
     if not hls or hls.from ~= from or hls.hl_rules ~= from.hl_rules or hls.tick ~= tick then
         -- warned shared with the result: a bad rule warns once
         hls = { src = true, from = from, tick = tick, hl = {}, hl_rules = from.hl_rules,
-            warned = from.warned, pending = 0 }
+            warned = from.hl_warned, pending = 0 }
         SOURCE_HIGHLIGHTS[bufnr] = hls
     end
     return hls
@@ -168,7 +165,7 @@ local function ensure_decoration_provider()
             if RESULT_HIGHLIGHTS[bufnr] then
                 return true
             end
-            local src = source_highlights(win, bufnr)
+            local src = source_highlights(bufnr)
             WIN_SOURCE[win] = src
             return src ~= nil
         end,
@@ -334,8 +331,8 @@ local function setup_highlights()
     })
 end
 
--- after a refresh: the windows that may show a source file, for new rules or a
--- new set of source files. decoration provider marks are ephemeral, they're only
+-- after a refresh or a rule buffer is wiped: the windows that may show a source
+-- file, for new rules or a new set of source files. decoration provider marks are ephemeral, they're only
 -- redrawn when the window is
 local function redraw_sources()
     if not config.highlight.hl_buf then

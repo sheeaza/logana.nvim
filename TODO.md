@@ -56,9 +56,10 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
   (the source can be huge), the same lazy way as the result: rows ask for level 2 as
   they're drawn, one rg per rule over their texts from stdin, cached per row.
   - only level 2: the `[rg]` match color stays in the result
-  - only a buffer that is a source of a result shown in the window's tab (a `file:`
-    header of it, by full path); the rules of the first such result window in
-    `nvim_tabpage_list_wins` order
+  - only a buffer that is a source of a rule buffer's result (a `file:` header of it,
+    by full path), bound to the rule buffer: in any tab, also with the result closed
+    or wiped, until the rule buffer is wiped. Of several, the last refreshed one
+    (first done as "a result shown in the window's tab", changed to this)
   - the cache is dropped when those rules change, or the source buffer changes
     (changedtick: edits, `:e`)
   - `highlight.hl_buf = false` in the config turns it off
@@ -67,8 +68,7 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
   as rg input). The source paths are a set per `file_rows`, extended while level 1 loads.
   After a refresh the non-result windows are redrawn (`redraw_sources`). `test-500m.log`
   (8.8M lines) in the source window: a screen at the top / middle / end colored in
-  2.1 / 2.5 / 2.3 ms, only the drawn rows cached. Closing a result window redraws them
-  too (`WinClosed`).
+  2.1 / 2.5 / 2.3 ms, only the drawn rows cached. Wiping a rule buffer redraws them too.
 - [ ] Quickfix export: put the result rows in the quickfix / location list (file, line,
   col of the first match), so `:cnext` and pickers work on them.
 

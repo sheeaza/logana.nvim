@@ -17,10 +17,13 @@ local config = require('logana.config')
 local M = {}
 
 -- per rule buffer refresh state, used to skip levels that don't need updating:
--- { match_sig, hl_sig, result_buf, result_dirty, attached_buf, file_rows,
+-- { match_sig, hl_sig, hl_rules, hl_warned (the result's level 2 rules, also for
+--   its source files), bound (when last refreshed, the source files take the rules
+--   of the last one), result_buf, result_dirty, attached_buf, file_rows,
 --   job (level 1 run in progress), gen, writing,
 --   texts (the result lines' texts, scan.open_texts), counts (count.lua) }
 local RULE_STATE = {}
+local refreshes = 0
 
 local function rule_state_of_result(result_buf)
     for rule_buf, st in pairs(RULE_STATE) do
@@ -63,8 +66,9 @@ local function finish_refresh(rule_buf, st, ropts, rerendered, fold_edited, t_al
 
     local hl_changed = st.hl_sig ~= ropts.hl_sig
     if hl_changed then
-        highlight.reset_highlights(highlight.by_buf[st.result_buf], ropts)
-        st.hl_sig = ropts.hl_sig
+        local hls = highlight.by_buf[st.result_buf]
+        highlight.reset_highlights(hls, ropts)
+        st.hl_sig, st.hl_rules, st.hl_warned = ropts.hl_sig, hls.hl_rules, hls.warned
         -- decoration provider marks are ephemeral; force visible windows to redraw them
         pcall(api.nvim__redraw, { buf = st.result_buf, valid = false })
     end
@@ -185,7 +189,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
             local hls = { match = job.parser.match, pending = 0 }
             highlight.reset_highlights(hls, job.ropts)
             highlight.by_buf[result_buf] = hls
-            st.hl_sig = job.ropts.hl_sig
+            st.hl_sig, st.hl_rules, st.hl_warned = job.ropts.hl_sig, hls.hl_rules, hls.warned
             -- the old folds don't match the new lines, they're rebuilt when done
             for _, win in ipairs(fn.win_findbuf(result_buf)) do
                 api.nvim_win_call(win, function() vim.cmd('silent! normal! zE') end)
@@ -331,6 +335,8 @@ local function refresh_from_rule(rule_buf, on_done)
 
     local st = RULE_STATE[rule_buf] or {}
     RULE_STATE[rule_buf] = st
+    refreshes = refreshes + 1
+    st.bound = refreshes
 
     -- level 1 is still loading the same search: let it finish, with the new
     -- [highlight] rules and [fold] applied when it does
@@ -386,6 +392,10 @@ local function forget(buf)
     RULE_STATE[buf] = nil
     highlight.by_buf[buf] = nil
     highlight.source_by_buf[buf] = nil
+    if st then
+        -- its source files lose their colors, or take another rule buffer's
+        vim.schedule(highlight.redraw_sources)
+    end
 end
 
 M.state = RULE_STATE
