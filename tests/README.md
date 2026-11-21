@@ -46,6 +46,9 @@ runner adds the repo to `runtimepath` itself.
   - level 2 (`[highlight]`) runs one `rg` per `[highlight]` line that has a pattern,
     when rows are drawn, not during the refresh;
   - `0` means nothing re-ran.
+- Calls `setup()` with `highlight.hl_buf = false`, so the counts are the result
+  buffer's rg runs only; the source window tests turn it on (`with_source`) and read
+  its level 2 with `source_highlighted(file)`.
 - `highlighted()` runs `:redraw`, which calls the decoration provider even headless,
   so rows on screen ask for level 2, and waits for it. Only rows on screen get it:
   tests that check a late row scroll there first (`normal! G`).

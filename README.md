@@ -9,6 +9,7 @@ Lightweight log analyzer for Neovim. Write ripgrep args under an `[rg]` section 
 - Pressing `<Enter>` in the rule buffer only redoes what's needed (see [Refresh](#refresh)).
 - Pressing `<Enter>` on a result line jumps to that line in the source file: in the source file's window if the current tab has one (the first one), otherwise in the result window.
 - Moving to another line in the result buffer moves the cursor of the source file's window along, if the current tab has one, without leaving the result (`result_win.follow`).
+- A source file's window in the same tab as the result gets the `[highlight]` colors too, only for the lines on screen; the `[rg]` color stays in the result (`highlight.hl_buf`).
 - Selecting text in the result buffer and pressing `<Enter>` adds it to `[highlight]`, or removes it if it's there (see [Toggling a highlight](#toggling-a-highlight)).
 - Each rule line shows how many result lines it matches (see [Hit counts](#hit-counts)).
 
@@ -86,6 +87,12 @@ Pressing `<Enter>` checks each level in turn and only reruns what changed:
 Level 2 runs only for the lines on screen: each line gets its `[highlight]` colors the
 first time it's drawn, from an rg run over just those lines, so scrolling to new lines
 colors them a moment later.
+
+The same goes for the window of a source file, a file with a `file:` header in a
+result shown in the same tab: its lines get the `[highlight]` colors (not the `[rg]`
+one) as they're drawn, so a huge log costs one screen at a time. The rules are those
+of the first such result window in the tab. They are redone when the rules change or
+the file's buffer does (edits, `:e`). `highlight.hl_buf = false` turns it off.
 
 Level 1 results load in the background: the first lines show right away and the rest
 are appended while you can keep working. While loading, a spinner and the number of

@@ -52,7 +52,7 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
   used when no run is loading and the result isn't edited, else `search()`.
   `test-500m.log`, a 1.1M row result of one file, one follow at rows 2 / 550k / 1.1M:
   0.04 / 0.02 / 0.02 ms, with `search()` 0.03 / 22 / 44 ms.
-- [ ] `[highlight]` colors in the source file's window too, only for the lines on screen
+- [x] `[highlight]` colors in the source file's window too, only for the lines on screen
   (the source can be huge), the same lazy way as the result: rows ask for level 2 as
   they're drawn, one rg per rule over their texts from stdin, cached per row.
   - only level 2: the `[rg]` match color stays in the result
@@ -62,6 +62,13 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
   - the cache is dropped when those rules change, or the source buffer changes
     (changedtick: edits, `:e`)
   - `highlight.hl_buf = false` in the config turns it off
+  Done: `source_highlights` in `highlight.lua`, the source's own state in
+  `SOURCE_HIGHLIGHTS` (`src = true`, same lazy request path as the result, whole lines
+  as rg input). The source paths are a set per `file_rows`, extended while level 1 loads.
+  After a refresh the non-result windows are redrawn (`redraw_sources`). `test-500m.log`
+  (8.8M lines) in the source window: a screen at the top / middle / end colored in
+  2.1 / 2.5 / 2.3 ms, only the drawn rows cached. Closing a result window redraws them
+  too (`WinClosed`).
 - [ ] Quickfix export: put the result rows in the quickfix / location list (file, line,
   col of the first match), so `:cnext` and pickers work on them.
 

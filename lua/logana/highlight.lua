@@ -1,5 +1,6 @@
 -- drawing levels 1 and 2 with a decoration provider, and computing level 2
 local api = vim.api
+local fn = vim.fn
 local config = require('logana.config')
 local log = require('logana.log')
 local now_ms = require('logana.util').now_ms
@@ -26,6 +27,14 @@ local NS_MATCH = api.nvim_create_namespace("logana.match")
 -- since eagerly creating one extmark per match makes the first redraw of a large
 -- result buffer (hundreds of thousands of matches) take seconds.
 local RESULT_HIGHLIGHTS = {}
+-- level 2 of source files shown next to a result, per source buffer: like a result's
+-- hl / hl_rules / warned / pending / busy / queued, plus src = true, from = <the
+-- result's highlights it took the rules from>, tick = <the buffer's changedtick>
+local SOURCE_HIGHLIGHTS = {}
+-- window -> the source highlights on_win picked for it, for on_line in the same redraw
+local WIN_SOURCE = {}
+-- file_rows table -> { n = <rows looked at>, set = { [full path] = true } }
+local SOURCE_PATHS = setmetatable({}, { __mode = 'k' })
 local decoration_provider_ready = false
 
 -- level 2 draws above level 1, so a [highlight] color wins where both overlap
@@ -42,7 +51,8 @@ local function draw_mark(bufnr, row, s, e, hl_group, priority)
     })
 end
 
--- result buffer -> rows drawn without level 2 ranges yet, asked for in on_end
+-- highlights -> { buf = <its buffer>, <rows drawn without level 2 ranges yet> },
+-- asked for in on_end
 local HL_WANT = {}
 local highlight_rows
 
@@ -74,6 +84,79 @@ local function request_rows(bufnr, hls, rows)
     hls.queued_n = (hls.queued_n or 0) + 1
 end
 
+-- the full paths of a result's 'file:' headers, extended as level 1 adds some
+local function has_source(rows, path)
+    local p = SOURCE_PATHS[rows]
+    if not p then
+        p = { n = 0, set = {} }
+        SOURCE_PATHS[rows] = p
+    end
+    for i = p.n + 1, #rows do
+        p.set[fn.fnamemodify(rows[i][2], ':p')] = true
+    end
+    p.n = #rows
+    return p.set[path] == true
+end
+
+-- the source highlights of a buffer drawn in win, or nil: it must be a source of a
+-- result shown in win's tab, the first such result window gives the rules. started
+-- over when those rules change, or the buffer does (edits, :e)
+local function source_highlights(win, bufnr)
+    if not config.highlight.hl_buf or api.nvim_get_option_value('buftype', { buf = bufnr }) ~= '' then
+        return nil
+    end
+    local path = api.nvim_buf_get_name(bufnr)
+    if path == '' then
+        return nil
+    end
+    local refresh = require('logana.refresh') -- it requires this module
+    local from
+    for _, w in ipairs(api.nvim_tabpage_list_wins(api.nvim_win_get_tabpage(win))) do
+        local rb = api.nvim_win_get_buf(w)
+        local res = RESULT_HIGHLIGHTS[rb]
+        if res then
+            local _, st = refresh.rule_state_of_result(rb)
+            -- while level 1 loads, the headers it found so far
+            local rows = st and (st.job and st.job.parser.file_rows or st.file_rows)
+            if rows and has_source(rows, path) then
+                from = res
+                break
+            end
+        end
+    end
+    if not from or #from.hl_rules == 0 then
+        return nil
+    end
+    local tick = api.nvim_buf_get_changedtick(bufnr)
+    local hls = SOURCE_HIGHLIGHTS[bufnr]
+    if not hls or hls.from ~= from or hls.hl_rules ~= from.hl_rules or hls.tick ~= tick then
+        -- warned shared with the result: a bad rule warns once
+        hls = { src = true, from = from, tick = tick, hl = {}, hl_rules = from.hl_rules,
+            warned = from.warned, pending = 0 }
+        SOURCE_HIGHLIGHTS[bufnr] = hls
+    end
+    return hls
+end
+
+-- the level 2 marks of a row, or asks for them once
+local function draw_hl(bufnr, hls, row)
+    local marks = hls.hl[row]
+    if marks == nil and #hls.hl_rules > 0 then
+        hls.hl[row] = false -- asked for once
+        local want = HL_WANT[hls]
+        if not want then
+            want = { buf = bufnr }
+            HL_WANT[hls] = want
+        end
+        want[#want + 1] = row
+    elseif marks then
+        local names = config.hi_group_names
+        for _, hi in ipairs(marks) do
+            draw_mark(bufnr, row, hi[1], hi[2], names[(hi[3] - 1) % #names + 1], PRIORITY_HL)
+        end
+    end
+end
+
 local function ensure_decoration_provider()
     if decoration_provider_ready then
         return
@@ -81,36 +164,34 @@ local function ensure_decoration_provider()
     decoration_provider_ready = true
 
     api.nvim_set_decoration_provider(NS_MATCH, {
-        on_win = function(_, _, bufnr)
-            return RESULT_HIGHLIGHTS[bufnr] ~= nil
+        on_win = function(_, win, bufnr)
+            if RESULT_HIGHLIGHTS[bufnr] then
+                return true
+            end
+            local src = source_highlights(win, bufnr)
+            WIN_SOURCE[win] = src
+            return src ~= nil
         end,
-        on_line = function(_, _, bufnr, row)
+        on_line = function(_, win, bufnr, row)
             local hls = RESULT_HIGHLIGHTS[bufnr]
+            if not hls then
+                -- a source file: level 2 only, the [rg] color stays in the result
+                return draw_hl(bufnr, WIN_SOURCE[win], row)
+            end
             local m = hls.match
             local lo, hi = ranges(m, row)
             for j = lo, hi - 1, 2 do
                 draw_mark(bufnr, row, m.cols[j], m.cols[j + 1], config.hi_match_group, PRIORITY_MATCH)
             end
-            local marks = hls.hl[row]
-            if marks == nil and #hls.hl_rules > 0 then
-                hls.hl[row] = false -- asked for once
-                local want = HL_WANT[bufnr] or {}
-                HL_WANT[bufnr] = want
-                want[#want + 1] = row
-            elseif marks then
-                local names = config.hi_group_names
-                for _, hi in ipairs(marks) do
-                    draw_mark(bufnr, row, hi[1], hi[2], names[(hi[3] - 1) % #names + 1], PRIORITY_HL)
-                end
-            end
+            draw_hl(bufnr, hls, row)
         end,
         on_end = function()
-            for bufnr, rows in pairs(HL_WANT) do
-                HL_WANT[bufnr] = nil
-                local hls = RESULT_HIGHLIGHTS[bufnr]
-                if hls then
-                    request_rows(bufnr, hls, rows)
-                end
+            for win in pairs(WIN_SOURCE) do
+                WIN_SOURCE[win] = nil
+            end
+            for hls, want in pairs(HL_WANT) do
+                HL_WANT[hls] = nil
+                request_rows(want.buf, hls, want)
             end
         end,
     })
@@ -121,10 +202,15 @@ end
 -- row, and visible rows are colored while level 1 still loads. each rule runs
 -- through rg over the rows' texts (stdin), so highlight patterns use the same regex
 -- syntax/options as [rg]. asynchronous: the ranges go to hls.hl, then the windows
--- redraw. on_done is called either way.
+-- redraw. on_done is called either way. a source file's rows are colored the same
+-- way, over their whole line.
+local function live(bufnr, hls)
+    return (hls.src and SOURCE_HIGHLIGHTS or RESULT_HIGHLIGHTS)[bufnr] == hls
+end
+
 highlight_rows = function(bufnr, hls, rows, on_done)
     local cache, rules = hls.hl, hls.hl_rules
-    if RESULT_HIGHLIGHTS[bufnr] ~= hls or #rules == 0 or #config.hi_group_names == 0 then
+    if not live(bufnr, hls) or #rules == 0 or #config.hi_group_names == 0 then
         return on_done()
     end
     -- '<lnum>: <text>' rows; headers and blank lines have nothing to color
@@ -132,7 +218,7 @@ highlight_rows = function(bufnr, hls, rows, on_done)
     for _, row in ipairs(rows) do
         cache[row] = cache[row] or false
         local line = api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
-        local ts = line and line:match('^%d+: ()')
+        local ts = line and (hls.src and 1 or line:match('^%d+: ()'))
         if ts then
             local i = #texts + 1
             texts[i], map_row[i], map_delta[i] = line:sub(ts), row, ts - 1 - pos
@@ -150,7 +236,7 @@ highlight_rows = function(bufnr, hls, rows, on_done)
     local function apply()
         on_done()
         log.trace(string.format("highlight rows took: %d ms", now_ms() - t0))
-        if RESULT_HIGHLIGHTS[bufnr] ~= hls or hls.hl ~= cache then
+        if not live(bufnr, hls) or hls.hl ~= cache then
             return -- level 1 reran or the rules changed meanwhile
         end
         for i, res in ipairs(results) do
@@ -248,7 +334,23 @@ local function setup_highlights()
     })
 end
 
+-- after a refresh: the windows that may show a source file, for new rules or a
+-- new set of source files. decoration provider marks are ephemeral, they're only
+-- redrawn when the window is
+local function redraw_sources()
+    if not config.highlight.hl_buf then
+        return
+    end
+    for _, win in ipairs(api.nvim_list_wins()) do
+        if not RESULT_HIGHLIGHTS[api.nvim_win_get_buf(win)] then
+            pcall(api.nvim__redraw, { win = win, valid = false })
+        end
+    end
+end
+
 M.by_buf = RESULT_HIGHLIGHTS
+M.source_by_buf = SOURCE_HIGHLIGHTS
+M.redraw_sources = redraw_sources
 M.ensure_decoration_provider = ensure_decoration_provider
 M.reset_highlights = reset_highlights
 M.match_ranges = match_ranges

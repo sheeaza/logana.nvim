@@ -13,6 +13,7 @@ M.config = config
 
 -- exposed for tests only
 M._result_highlights = highlight.by_buf
+M._source_highlights = highlight.source_by_buf
 M._match_ranges = highlight.match_ranges
 function M._busy(rule_buf)
     local st = refresh.state[rule_buf]
@@ -112,6 +113,18 @@ local function setup_keybinding()
             refresh.forget(ev.buf)
         end,
         desc = "logana: free the state of a wiped rule/result buffer",
+    })
+
+    api.nvim_create_autocmd("WinClosed", {
+        group = M._quit_auto,
+        callback = function(ev)
+            local win = tonumber(ev.match)
+            if win and api.nvim_win_is_valid(win) and highlight.by_buf[api.nvim_win_get_buf(win)] then
+                -- after the close: the source windows still drawn have no result now
+                vim.schedule(highlight.redraw_sources)
+            end
+        end,
+        desc = "logana: drop the [highlight] colors of the closed result's source windows",
     })
 
     api.nvim_create_autocmd("QuitPre", {

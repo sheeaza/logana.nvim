@@ -9,7 +9,9 @@ vim.cmd("filetype on")
 
 local api = vim.api
 local L = require("logana")
-L.setup({})
+-- the source window's level 2 runs rg too: off, so the rg counts are the result's.
+-- the source window tests turn it on
+L.setup({ highlight = { hl_buf = false } })
 
 local process = require("logana.proc")
 local orig_system = process.system
@@ -921,6 +923,113 @@ test("follow: an edited result finds the file header by searching", function()
     enter(vim.fn.bufwinid(rb))
     result_move(5)
     eq({ 3, 0 }, api.nvim_win_get_cursor(src_win), "row 5")
+end)
+
+-- runs f with the source window's level 2 on
+local function with_source(f)
+    L.config.highlight.hl_buf = true
+    local ok, err = pcall(f)
+    L.config.highlight.hl_buf = false
+    assert(ok, err)
+end
+
+-- draws the screen and waits for the source buffer's level 2; returns
+-- { "hl:<row>:<text>:<hl_idx>", ... }, or nil when it has none
+local function source_highlighted(file)
+    vim.cmd("redraw")
+    local b = vim.fn.bufnr(file)
+    local hls = L._source_highlights[b]
+    if not hls then
+        return nil
+    end
+    vim.wait(5000, function() return hls.pending == 0 end, 1)
+    local out = {}
+    for row, line in ipairs(api.nvim_buf_get_lines(b, 0, -1, false)) do
+        for _, m in ipairs(hls.hl[row - 1] or {}) do
+            table.insert(out, ("hl:%d:%s:%d"):format(row - 1, line:sub(m[1] + 1, m[2]), m[3]))
+        end
+    end
+    return out
+end
+
+test("source window: [highlight] colors on its lines, no [rg] color", function()
+    with_source(function()
+        local rule = setup_session()
+        set_rule(rule, { "-e 'resource'" }, { "-e 'busy'", "-e 'retry'", "-e 'nothing'" })
+        refresh(rule)
+        -- 'nothing' is on a line the result doesn't have: the whole source is colored
+        eq({ "hl:0:busy:1", "hl:2:retry:2", "hl:3:nothing:3" }, source_highlighted("a.log"))
+        eq(nil, L._source_highlights[vim.fn.bufnr("a.log")].match, "no level 1")
+        eq({ "match:1:resource", "hl:1:busy:1", "match:2:resource", "hl:2:retry:2" }, highlighted(),
+            "the result as before")
+    end)
+end)
+
+test("source window: only the lines on screen get level 2", function()
+    with_source(function()
+        local rule = setup_session()
+        write_big_log(2000)
+        vim.cmd("checktime")
+        local src_win = vim.fn.bufwinid("a.log")
+        set_rule(rule, { "-e '^1500 '" }, { "-e 'busy'" })
+        refresh(rule)
+        source_highlighted("a.log")
+        local hl = L._source_highlights[vim.fn.bufnr("a.log")].hl
+        eq(true, hl[0] ~= nil and hl[1499] == nil, "the top, not line 1500")
+        local asked = vim.tbl_count(hl)
+        eq(true, asked <= api.nvim_win_get_height(src_win), "about one screen: " .. asked)
+        api.nvim_win_set_cursor(src_win, { 1500, 0 })
+        api.nvim_win_call(src_win, function() vim.cmd("normal! zz") end)
+        source_highlighted("a.log")
+        eq(1, #hl[1499], "line 1500 once on screen")
+    end)
+end)
+
+test("source window: new [highlight] rules or an edit of the source start it over", function()
+    with_source(function()
+        local rule = setup_session()
+        set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+        refresh(rule)
+        eq({ "hl:0:busy:1" }, source_highlighted("a.log"))
+        set_rule(rule, { "-e 'resource'" }, { "-e 'Timeout'" })
+        eq(0, refresh(rule), "level 1 skipped")
+        eq({ "hl:2:Timeout:1" }, source_highlighted("a.log"))
+        api.nvim_buf_set_lines(vim.fn.bufnr("a.log"), 3, 4, false, { "x Timeout" })
+        eq({ "hl:2:Timeout:1", "hl:3:Timeout:1" }, source_highlighted("a.log"))
+    end)
+end)
+
+test("source window: none for a file that isn't a source, or with the result in another tab", function()
+    with_source(function()
+        local rule = setup_session()
+        vim.fn.writefile(LOG, "b.log")
+        vim.cmd("split b.log")
+        set_rule(rule, { "-e 'resource'", "a.log" }, { "-e 'busy'" }, false)
+        refresh(rule)
+        eq({ "file: a.log", "1: cam ERROR resource busy", "3: resource Timeout retry", "" }, result_lines())
+        eq({ "hl:0:busy:1" }, source_highlighted("a.log"))
+        eq(nil, source_highlighted("b.log"), "b.log isn't searched")
+
+        local a = vim.fn.bufnr("a.log")
+        vim.cmd("tabnew")
+        api.nvim_set_current_buf(a)
+        L._source_highlights[a] = nil
+        eq(nil, source_highlighted("a.log"), "no result in this tab")
+        vim.cmd("tabprevious")
+        eq({ "hl:0:busy:1" }, source_highlighted("a.log"), "back in the result's tab")
+        api.nvim_win_close(vim.fn.bufwinid(result_buf()), true)
+        vim.wait(100, function() return false end, 1) -- the scheduled redraw
+        L._source_highlights[a] = nil
+        eq(nil, source_highlighted("a.log"), "result window closed")
+        vim.cmd("tabonly")
+    end)
+end)
+
+test("source window: highlight.hl_buf = false shows none", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+    refresh(rule)
+    eq(nil, source_highlighted("a.log"))
 end)
 
 -- the tests above fire CursorMoved themselves; this one runs the plugin in a child

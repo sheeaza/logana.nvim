@@ -68,6 +68,9 @@ local function finish_refresh(rule_buf, st, ropts, rerendered, fold_edited, t_al
         -- decoration provider marks are ephemeral; force visible windows to redraw them
         pcall(api.nvim__redraw, { buf = st.result_buf, valid = false })
     end
+    if hl_changed or rerendered then
+        highlight.redraw_sources()
+    end
     if rerendered then
         count.run(rule_buf, st, 'rg', ropts.rg_counts)
     end
@@ -382,6 +385,7 @@ local function forget(buf)
     end
     RULE_STATE[buf] = nil
     highlight.by_buf[buf] = nil
+    highlight.source_by_buf[buf] = nil
 end
 
 M.state = RULE_STATE

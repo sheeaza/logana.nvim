@@ -38,7 +38,9 @@ local M = {
     hit_count = true,
 
     highlight = {
-        hl_buf = true,   -- true: also highlight normal buffers, except logana buffers. false: ...
+        -- true: [highlight] colors also in the windows of a result's source files in
+        -- the same tab, for the lines on screen ([rg] colors only in the result)
+        hl_buf = true,
         hl_result = true,-- true: highlight for result buffers. false: ...
     },
 
