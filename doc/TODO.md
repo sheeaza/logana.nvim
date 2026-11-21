@@ -4,8 +4,6 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 
 ## Robustness
 
-- [ ] CI job on macOS, so the path without `posix_spawn` (`vim.system` and the pipe) and
-  without memfd (temp file in `stdpath('run')`) is tested.
 - [ ] Bench gate: `tests/bench.lua <log> --save <file>` writes the medians per case
   (`first`, `max_batch`, `level1`, `total`, `rss_MB`, and `count`: until the hit counts
   are in) to a baseline file; `--gate <file>` reruns and exits 1 when a column of a

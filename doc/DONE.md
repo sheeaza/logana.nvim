@@ -322,3 +322,10 @@ From a review of the modules after the split.
   with `\xff\xfe` is read by rg as UTF-16), a 2 MB line, paths with spaces and `:`
   (headers, jump, `[fold]`, `opened_only = false`), the rule buffer emptied or
   `[fold]` added while loading.
+- [x] CI job on macOS, so the path without `posix_spawn` (`vim.system` and the pipe) and
+  without memfd (temp file in `stdpath('run')`) is tested.
+  Done: a `macos-latest` job (v0.12.6, ripgrep from Homebrew) in `test.yml`, checked
+  with actionlint; its first run is on the next push. Run on linux first with
+  `proc.enabled = false` and a preloaded `memfd_create` that fails (how in
+  `tests/README.md`): level 1 over a pipe hung on a line over 1 MB, fixed (a pump batch
+  always takes a chunk). Test for it with `proc.enabled = false`, in the linux job too.

@@ -107,8 +107,18 @@ call `refresh(rule)`; with `opened_only = true` the change is detected, as the m
 ## CI
 
 `.github/workflows/test.yml` runs the same command on GitHub Actions for every
-push and pull request. It runs against the latest Neovim release (v0.12.6) and
-nightly, with ripgrep from Ubuntu's packages.
+push and pull request. On Ubuntu it runs against the latest Neovim release (v0.12.6)
+and nightly, with ripgrep from Ubuntu's packages. On macOS (latest release, ripgrep from
+Homebrew) it tests the paths Linux doesn't take: rg started with `vim.system` and read
+over a pipe instead of `posix_spawn` and a memfd, and temp files in `stdpath('run')`.
+
+To run those paths on Linux, set `require("logana.proc").enabled = false` before the
+tests (no `posix_spawn`, so `vim.system`) and preload a `memfd_create` that fails:
+```sh
+printf 'int memfd_create(const char *n, unsigned f) { return -1; }\n' > /tmp/nomemfd.c
+cc -shared -fPIC -o /tmp/nomemfd.so /tmp/nomemfd.c
+LD_PRELOAD=/tmp/nomemfd.so nvim --headless -u NONE -l tests/run.lua
+```
 
 ## Benchmark
 

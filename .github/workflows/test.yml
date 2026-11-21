@@ -6,18 +6,29 @@ on:
 
 jobs:
   test:
-    name: nvim ${{ matrix.nvim }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} nvim ${{ matrix.nvim }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         # latest release, plus nightly to catch upcoming breakage early
+        os: [ubuntu-latest]
         nvim: [v0.12.6, nightly]
+        include:
+          # no posix_spawn (vim.system and a pipe) and no memfd (temp files in
+          # stdpath('run')): the paths linux doesn't take
+          - os: macos-latest
+            nvim: v0.12.6
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install ripgrep
+      - name: Install ripgrep (linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Install ripgrep (macos)
+        if: runner.os == 'macOS'
+        run: brew install ripgrep
 
       - uses: rhysd/action-setup-vim@v1
         with:
