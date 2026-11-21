@@ -34,7 +34,8 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 - [ ] Context on demand: the source file's own window is the context, no float.
   - `<cr>` on a result row: if the source file is not in a window of the current tab,
     keep today's behavior (show it in the result window). If it is, go to that window
-    and put the cursor on the row's line / col, with `m'` first so `<C-o>` goes back
+    and put the cursor on the row's line / col, with `m'` first so `<C-o>` goes back.
+    Done: `source_win` / `result_buffer_jump` in `result.lua`
   - Follow: moving to another line in the result window moves the cursor of that
     source window too, without leaving the result window. Only when the result line
     changes (not the col, and not on entering the window: `CursorMoved` fires then),

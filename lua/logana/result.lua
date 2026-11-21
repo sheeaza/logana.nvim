@@ -79,6 +79,16 @@ local function show_result(rule_buf, result_buf)
     end
 end
 
+-- the first window of the current tab showing buf, other than the current one
+local function source_win(buf)
+    local cur = api.nvim_get_current_win()
+    for _, win in ipairs(api.nvim_tabpage_list_wins(0)) do
+        if win ~= cur and api.nvim_win_get_buf(win) == buf then
+            return win
+        end
+    end
+end
+
 local function result_buffer_jump()
     local line = api.nvim_get_current_line()
     local lnum_str = line:match("^(%d+):")
@@ -108,6 +118,15 @@ local function result_buffer_jump()
     end
 
     local target_buf = fn.bufnr(file)
+    local src_win = target_buf ~= -1 and source_win(target_buf)
+    if src_win then
+        -- the file is already shown in this tab: go there, the result stays
+        api.nvim_set_current_win(src_win)
+        vim.cmd("normal! m'")
+        pcall(api.nvim_win_set_cursor, src_win, { lnum, col })
+        return
+    end
+
     if target_buf == -1 then
         target_buf = fn.bufadd(file)
         fn.bufload(target_buf)

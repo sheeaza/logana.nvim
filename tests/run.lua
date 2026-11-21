@@ -162,6 +162,40 @@ test("refresh opens the result window, also after it was closed", function()
     eq(true, vim.fn.bufwinid(result_buf()) ~= -1, "shown again")
 end)
 
+-- puts the cursor on result row `row` (1-based), col `col`, and presses the jump key
+local function result_jump(row, col)
+    api.nvim_set_current_win(vim.fn.bufwinid(result_buf()))
+    api.nvim_win_set_cursor(0, { row, col })
+    require("logana.result").result_buffer_jump()
+end
+
+test("<Enter> on a result row: the source shown in this tab gets the cursor, the result stays", function()
+    local rule = setup_session()
+    local src_win = vim.fn.bufwinid("a.log")
+    set_rule(rule, { "-e 'Timeout'" })
+    refresh(rule)
+    local res_win = vim.fn.bufwinid(result_buf())
+    eq({ "file: a.log", "3: resource Timeout retry", "" }, result_lines())
+    result_jump(2, 12) -- on "Timeout"
+    eq(src_win, api.nvim_get_current_win(), "went to the source window")
+    eq({ 3, 9 }, api.nvim_win_get_cursor(src_win), "source cursor")
+    eq(result_buf(), api.nvim_win_get_buf(res_win), "result window keeps the result")
+    vim.cmd("normal! \15") -- <C-o>
+    eq({ 1, 0 }, api.nvim_win_get_cursor(src_win), "<C-o> goes back")
+end)
+
+test("<Enter> on a result row: the source not shown in this tab opens in the result window", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'Timeout'" })
+    refresh(rule)
+    api.nvim_win_close(vim.fn.bufwinid("a.log"), true)
+    local res_win = vim.fn.bufwinid(result_buf())
+    result_jump(2, 12)
+    eq(res_win, api.nvim_get_current_win(), "stays in the window")
+    eq(vim.fn.bufnr("a.log"), api.nvim_win_get_buf(res_win), "source in the result window")
+    eq({ 3, 9 }, api.nvim_win_get_cursor(res_win), "cursor")
+end)
+
 test("result buffer sits next to a rule file opened from another directory", function()
     setup_session()
     vim.fn.mkdir("sub", "p")
