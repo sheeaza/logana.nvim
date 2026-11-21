@@ -64,6 +64,14 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
   or `:`, editing the rule buffer while level 1 is loading.
 - [ ] CI job on macOS, so the path without `posix_spawn` (`vim.system` and the pipe) and
   without memfd (temp file in `stdpath('run')`) is tested.
+- [ ] Bench gate: `tests/bench.lua <log> --save <file>` writes the medians per case
+  (`first`, `max_batch`, `level1`, `total`, `rss_MB`, and `count`: until the hit counts
+  are in) to a baseline file; `--gate <file>` reruns and exits 1 when a column of a
+  case is over its baseline by more than 15% and 10 ms (rss: 15% and 10 MB), printing
+  the offending cells. The baseline is machine specific, so it's kept out of the repo:
+  save it on the commit before a change, gate after. A `--gen <MB>` option writes a
+  synthetic log (fixed seed, the cases' patterns at known rates) for a machine without
+  the camera log.
 - [ ] Bench case with a broad [highlight] rule (matching most lines), to see whether the
   cancelled `collect_highlights` item (`DONE.md`) is worth reopening.
 
