@@ -51,11 +51,20 @@ There is no command. Rule and result buffers are plain files, told apart by exte
 
   [highlight]
   # one color per line; a line may hold several patterns and rg flags.
-  # a line with only flags applies to every line and takes no color.
+  # a line with only flags (no -e/-f) gets no color; its flags are added to
+  # every pattern line of this section.
   --smart-case
   -i -e 'error'
   -e 'retry' -e 'busy'
   ```
+   Here `--smart-case` holds only flags, so it is not a highlight of its own. It is put in
+   front of each pattern line, which gives two highlights with one color each:
+   - `--smart-case -i -e 'error'`
+   - `--smart-case -e 'retry' -e 'busy'`
+
+   The shared flags come first, so a line's own flags win (`-i` above overrides
+   `--smart-case`). Flag-only lines in `[rg]` work the same way for the hit counts: each
+   pattern line is counted with them in front.
 4) Press `<Enter>` in the rule buffer. The results go to `cam.logana_result`, next to the
    rule file, and its window opens beside the rule window if it isn't shown already (see
    `layout` and `result_win` in `defconfig.lua`). It lists `file: <path>` headers followed

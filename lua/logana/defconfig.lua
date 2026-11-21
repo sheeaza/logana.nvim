@@ -89,7 +89,12 @@ opened_only = true
 # Example:
 #    -e 'error'
 #    -i -e 'timeout' -e 'retry'
-# a line with only flags (no pattern) applies to every line
+# a line with only flags (no -e/-f) gets no color; its flags are put in front
+# of every pattern line. e.g.
+#    --smart-case
+#    -e 'error'
+#    -i -e 'retry'
+# gives two colors: "--smart-case -e 'error'" and "--smart-case -i -e 'retry'"
 [highlight]
 --smart-case
 
