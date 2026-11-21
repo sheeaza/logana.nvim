@@ -115,7 +115,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
     local gen = st.gen
     local job = {
         sig = ropts.match_sig, ropts = ropts, fold_edited = fold_edited, on_done = on_done,
-        chunks = {}, head = 1, tail = 0, rest = '', parser = level1.new_parser(),
+        chunks = {}, head = 1, tail = 0, rest = {}, rest_size = 0, parser = level1.new_parser(),
         t0 = now_ms(), flushed = 0, parse_ms = 0, set_ms = 0, max_ms = 0,
     }
     st.job = job
@@ -240,24 +240,29 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
             more = scan.scan_output(job.src, p, BATCH_BYTES) == BATCH_BYTES
             drained = exited and not more
         else
-            local parts, size = { job.rest }, #job.rest
-            while job.head <= job.tail and size < BATCH_BYTES do
+            -- job.rest: the pieces of a partial last line, no '\n' in them. at least
+            -- one chunk is taken, also when a line longer than a batch is pending
+            local parts, size, nl = job.rest, job.rest_size, false
+            local took = false
+            while job.head <= job.tail and (size < BATCH_BYTES or not took) do
                 local c = job.chunks[job.head]
                 job.chunks[job.head] = nil
                 job.head = job.head + 1
                 parts[#parts + 1] = c
-                size = size + #c
+                size, took = size + #c, true
+                nl = nl or c:find('\n', 1, true) ~= nil
             end
-            local data = table.concat(parts)
-            -- rg ends every line with '\n'; keep a partial last line for the next batch
-            local cut = data:match('^.*()\n')
-            if cut then
-                job.rest = data:sub(cut + 1)
-                data = data:sub(1, cut)
+            if nl then
+                local data = table.concat(parts)
+                -- rg ends every line with '\n'; keep a partial last line for the next batch
+                local cut = data:match('^.*()\n')
+                local rest = data:sub(cut + 1)
+                job.rest, job.rest_size = { rest }, #rest
+                scan.scan_batch(p, data:sub(1, cut))
             else
-                job.rest, data = data, ''
+                -- still in the same line: joined once its '\n' comes
+                job.rest, job.rest_size = parts, size
             end
-            scan.scan_batch(p, data)
             more = job.head <= job.tail
             drained = job.exit and not more
         end
@@ -289,7 +294,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
     end
 
     -- not text = true: its '\r\n' gsub over the whole output cost about as much as rg.
-    -- a '\r' line ending stays in the line text, as it did with --json.
+    -- a '\r' line ending is dropped by scan_batch.
     -- both callbacks run in a fast event context, they only queue work for pump
     job.src = process.enabled and scan.open_output() or nil
     local ok, proc = pcall(process.system, ropts.args_common, {
