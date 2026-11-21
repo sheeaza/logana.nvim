@@ -717,13 +717,15 @@ test("a line longer than a batch, read over a pipe (vim.system, no memfd)", func
     vim.fn.writefile({ "a busy", long, "b busy" }, "a.log")
     vim.cmd("checktime")
     set_rule(rule, { "-e 'busy'" })
+    -- restored as it was: false already where there's no posix_spawn (macOS)
+    local enabled = process.enabled
     process.enabled = false
     local ok, err = pcall(function()
         refresh(rule)
         eq(false, L._busy(rule), "done")
         eq({ "file: a.log", "1: a busy", "2: " .. long, "3: b busy", "" }, result_lines())
     end)
-    process.enabled = true
+    process.enabled = enabled
     assert(ok, err)
 end)
 
