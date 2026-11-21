@@ -3,6 +3,7 @@ local api = vim.api
 local fn = vim.fn
 local config = require('logana.config')
 local LEVEL1_ARGS = require('logana.level1').ARGS
+local process = require('logana.proc')
 
 local M = {}
 
@@ -237,6 +238,87 @@ local function initialize_rule_buffer(rule_buf)
     end
 end
 
+-- the [highlight] lines whose args are `want`, the last rule line of the section
+-- (or its header), and the flag-only lines' args
+local function find_highlight(rule_buf, want)
+    local lines = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
+    local section, last, found, shared = '', nil, {}, {}
+    for i, l in ipairs(lines) do
+        local s = l:gsub("%s+$", "")
+        local cur_section = s:match("^%s*%[(.+)%]%s*$")
+        if cur_section then
+            section = cur_section
+            if section == 'highlight' then
+                last = i
+            end
+        elseif section == 'highlight' and not s:match("^%s*$") and not s:match("^%s*#") then
+            last = i
+            local args = split_with_quotes(s)
+            if vim.deep_equal(args, want) then
+                table.insert(found, i)
+            elseif not has_pattern(args) then
+                vim.list_extend(shared, args)
+            end
+        end
+    end
+    return found, last, shared
+end
+
+-- removes the [highlight] lines that are exactly `-F -e '<text>'` (the text as is,
+-- not a regex), or adds one at the end of the section (making it if there's none)
+-- once rg accepts it with the section's flags.
+-- on_done(true) when added, false when removed, nil when nothing changed (warned)
+local function toggle_highlight(rule_buf, text, on_done)
+    local want = { '-F', '-e', text }
+    local q = text:find("'", 1, true) and '"' or "'"
+    local line = '-F -e ' .. q .. text .. q
+    -- the rule parser has no escapes: text with both quotes, or a '\' before the
+    -- closing one, can't be written
+    if not vim.deep_equal(split_with_quotes(line), want) then
+        vim.notify(("[logana] can't write %s as a [highlight] line"):format(text), vim.log.levels.WARN)
+        return on_done(nil)
+    end
+
+    local found, _, shared = find_highlight(rule_buf, want)
+    if #found > 0 then
+        for j = #found, 1, -1 do
+            api.nvim_buf_set_lines(rule_buf, found[j] - 1, found[j], false, {})
+        end
+        return on_done(false)
+    end
+
+    -- as level 2 runs it, over no input: only the flags are checked
+    local args = { config.rg.cmd, '--no-config' }
+    vim.list_extend(args, shared)
+    vim.list_extend(args, want)
+    table.insert(args, '-')
+    local ok = pcall(process.system, args, { text = true, stdin = '' }, function(res)
+        vim.schedule(function()
+            if res.code == 2 then
+                vim.notify(("[logana] not added to [highlight], %s: %s"):format(line, res.stderr),
+                    vim.log.levels.WARN)
+                return on_done(nil)
+            end
+            if not api.nvim_buf_is_valid(rule_buf) then
+                return on_done(nil)
+            end
+            -- the buffer may have changed meanwhile
+            local _, last = find_highlight(rule_buf, want)
+            if last then
+                api.nvim_buf_set_lines(rule_buf, last, last, false, { line })
+            else
+                api.nvim_buf_set_lines(rule_buf, -1, -1, false, { '', '[highlight]', line })
+            end
+            on_done(true)
+        end)
+    end)
+    if not ok then
+        vim.notify("[logana] failed to execute ripgrep", vim.log.levels.WARN)
+        on_done(nil)
+    end
+end
+
 M.get_runtime_opts = get_runtime_opts
+M.toggle_highlight = toggle_highlight
 M.initialize_rule_buffer = initialize_rule_buffer
 return M

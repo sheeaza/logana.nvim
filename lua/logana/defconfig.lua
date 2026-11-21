@@ -95,6 +95,9 @@ opened_only = true
     key = {
         rule_refresh = '<cr>',
         result_jump = '<cr>',
+        -- visual mode in a result buffer: add the selected text to [highlight], or
+        -- remove it if it's there
+        result_toggle_highlight = '<cr>',
     },
 }
 

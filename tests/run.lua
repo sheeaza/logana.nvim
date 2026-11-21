@@ -185,6 +185,119 @@ test("a [highlight] rule's own flags override the shared ones", function()
     eq({ "match:1:resource", "match:2:resource", "hl:2:Timeout:2" }, highlighted())
 end)
 
+-- in the result window: select `keys` from (row, col) (1-based row, 0-based col),
+-- press <Enter>, and wait for [highlight] to change (adding waits on rg) and the
+-- refresh it starts, or for `done()`
+local function toggle_selection(rule, row, col, keys, done)
+    local tick = api.nvim_buf_get_changedtick(rule)
+    api.nvim_set_current_win(vim.fn.bufwinid(result_buf()))
+    api.nvim_win_set_cursor(0, { row, col })
+    api.nvim_feedkeys(api.nvim_replace_termcodes(keys .. "<CR>", true, false, true), "mx", false)
+    vim.wait(5000, done or function() return api.nvim_buf_get_changedtick(rule) ~= tick end, 1)
+    vim.wait(5000, function() return not L._busy(rule) end, 1)
+end
+
+local function hl_section(rule)
+    local lines = api.nvim_buf_get_lines(rule, 0, -1, false)
+    local i = vim.fn.index(lines, "[highlight]")
+    return vim.list_slice(lines, i + 2)
+end
+
+-- rule.toggle_highlight, waited for; returns what it passed to on_done
+local function toggle(rule, text)
+    local res = "pending"
+    require("logana.rule").toggle_highlight(rule, text, function(changed) res = changed end)
+    vim.wait(5000, function() return res ~= "pending" end, 1)
+    return res
+end
+
+-- runs f, returns the messages vim.notify got meanwhile
+local function notified(f)
+    local msgs = {}
+    local orig_notify = vim.notify
+    vim.notify = function(msg) table.insert(msgs, msg) end
+    local ok, err = pcall(f)
+    vim.notify = orig_notify
+    assert(ok, err)
+    return msgs
+end
+
+test("visual <Enter> in the result adds the selection to [highlight], again removes it", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" }, { "--smart-case" })
+    refresh(rule)
+    toggle_selection(rule, 2, 7, "v4l")   -- "1: cam ERROR ..."
+    eq({ "--smart-case", "-F -e 'ERROR'" }, hl_section(rule))
+    eq({ "match:1:resource", "hl:1:ERROR:1", "match:2:resource" }, highlighted())
+    toggle_selection(rule, 2, 7, "v4l")
+    eq({ "--smart-case" }, hl_section(rule))
+    eq({ "match:1:resource", "match:2:resource" }, highlighted())
+    eq("n", api.nvim_get_mode().mode, "mode")
+end)
+
+test("visual <Enter> over several lines only shows a message", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+    refresh(rule)
+    local msgs = notified(function()
+        toggle_selection(rule, 2, 7, "vj", function() return true end)
+    end)
+    eq({ "[logana] only single line selections are supported" }, msgs)
+    eq({ "-e 'busy'" }, hl_section(rule))
+end)
+
+test("toggling [highlight]: only exact lines are removed, the template's section used", function()
+    local rule = setup_session()   -- filled with the template
+    eq(true, toggle(rule, "it's"))
+    eq(true, toggle(rule, [=[[]()\w2409]=]))
+    local lines = api.nvim_buf_get_lines(rule, 0, -1, false)
+    local i = vim.fn.index(lines, "[highlight]")
+    eq({ "[highlight]", "--smart-case", [[-F -e "it's"]], [=[-F -e '[]()\w2409']=], "" },
+        vim.list_slice(lines, i + 1, i + 5))
+    api.nvim_buf_set_lines(rule, i + 1, i + 1, false, { "-e 'busy'" })
+    eq(true, toggle(rule, "busy"))     -- not the same rule
+    eq(false, toggle(rule, "busy"))
+    eq(false, toggle(rule, "it's"))
+    lines = api.nvim_buf_get_lines(rule, 0, -1, false)
+    eq({ "[highlight]", "-e 'busy'", "--smart-case", [=[-F -e '[]()\w2409']=], "" },
+        vim.list_slice(lines, i + 1, i + 5))
+end)
+
+test("a selection with regex characters and quotes is matched as is", function()
+    local rule = setup_session()
+    vim.fn.writefile({ "it's (busy) [1]" }, "a.log")
+    vim.cmd("checktime")
+    set_rule(rule, { "-e 'busy'" })
+    refresh(rule)
+    toggle_selection(rule, 2, 3, "v3l")   -- "1: it's (busy) [1]"
+    toggle_selection(rule, 2, 8, "v5l")
+    toggle_selection(rule, 2, 15, "v2l")
+    eq({ [[-F -e "it's"]], "-F -e '(busy)'", "-F -e '[1]'" }, hl_section(rule))
+    eq({ "match:1:busy", "hl:1:it's:1", "hl:1:(busy):2", "hl:1:[1]:3" }, highlighted())
+end)
+
+test("toggling [highlight] warns and adds nothing when the line can't be written or rg rejects it", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" }, { "--smart-case" })
+    local msgs = notified(function()
+        eq(nil, toggle(rule, [[it's "b"]]))   -- both quotes
+        eq(nil, toggle(rule, "a\\"))         -- would escape the closing quote
+    end)
+    eq(2, #msgs, "warnings")
+    set_rule(rule, { "-e 'resource'" }, { "--no-such-flag" })
+    msgs = notified(function() eq(nil, toggle(rule, "busy")) end)
+    eq(1, #msgs, "warnings")
+    assert(msgs[1]:find("no-such-flag", 1, true), msgs[1])
+    eq({ "--no-such-flag" }, hl_section(rule))
+end)
+
+test("toggling [highlight] adds the section when there's none", function()
+    local rule = setup_session()
+    api.nvim_buf_set_lines(rule, 0, -1, false, { "[rg]", "-e 'resource'" })
+    toggle(rule, "busy")
+    eq({ "[rg]", "-e 'resource'", "", "[highlight]", "-F -e 'busy'" }, api.nvim_buf_get_lines(rule, 0, -1, false))
+end)
+
 test("rule window gets layout.rule_window percent of the rule/result split", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'" })

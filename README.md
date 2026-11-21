@@ -8,6 +8,7 @@ Lightweight log analyzer for Neovim. Write ripgrep args under an `[rg]` section 
   2. `[highlight]`: one ripgrep args list per line, matched against the result lines. Each line gets its own color (`LoganaHighlight1..N`).
 - Pressing `<Enter>` in the rule buffer only redoes what's needed (see [Refresh](#refresh)).
 - Pressing `<Enter>` on a result line jumps to that line in the source file.
+- Selecting text in the result buffer and pressing `<Enter>` adds it to `[highlight]`, or removes it if it's there (see [Toggling a highlight](#toggling-a-highlight)).
 
 ## Install
 Needs Neovim built with LuaJIT (the default) and ripgrep.
@@ -89,6 +90,16 @@ The folded files are kept in the rule buffer under `[fold]`, one per line. That 
 is updated when you leave the result window or refresh, and is saved with the rule file.
 If it is missing, it is added the first time a file is folded. Editing `[fold]` by hand
 and pressing `<Enter>` applies it.
+
+### Toggling a highlight
+In the result buffer, select text on one line in visual mode and press `<Enter>`
+(`key.result_toggle_highlight`): `-F -e '<text>'` is added at the end of the rule
+buffer's `[highlight]` section and the colors are refreshed, so the text is matched as
+is, not as a regex. A text with a `'` is put in `"` instead. Doing it again on the same
+text removes that line. Only lines that are exactly that rule count, patterns inside
+other lines are left alone. If the line can't be written (the text has both quotes) or
+rg rejects it with the section's flags, it warns and adds nothing. The rule buffer is
+edited like any buffer, it isn't saved.
 
 ## API
 - `require("logana").setup(opts)`: see `lua/logana/defconfig.lua` for all options.

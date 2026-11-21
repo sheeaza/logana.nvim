@@ -173,7 +173,7 @@ From a review of the modules after the split.
   `fg` and `bg`, so the text stays readable on dark and light backgrounds), clearly
   distinct from each other: 10 for `highlight_colors`, and `match_color` along with
   them.
-- [ ] In a result buffer, visual select some text, <Enter>: toggle a highlight for it
+- [x] In a result buffer, visual select some text, <Enter>: toggle a highlight for it
   through `[highlight]` in the rule buffer: if there's no line for the text, add
   `-e '<text>'` under `[highlight]`, else remove that line, then rerun level 2. The
   text is taken as `[highlight]` takes it (a regex, unless its flags say otherwise,
@@ -187,6 +187,14 @@ From a review of the modules after the split.
   - key in the config, `key.result_toggle_highlight = '<cr>'` (visual mode)
   - the new line goes at the end of the `[highlight]` section; the text is the
     selection as is (a `<lnum>: ` prefix in it isn't trimmed)
+  Done: `rule.toggle_highlight`, the keymap in `init.lua`. Changed from the plan: the
+  line is `-F -e '<text>'`, a selection is matched as is (regex characters, quotes)
+  rather than as a regex; in `""` when the text has a `'`. The rule parser has no
+  escapes, so text with both quotes (or a `\` before the closing one) gets a warning
+  instead. Before adding, rg checks the line with the section's flags (async, over
+  empty stdin), a warning and nothing added if it fails. A result buffer that wasn't
+  rendered in this session finds its rule buffer by name (`x.logana_result` ->
+  `x.logana_rule`, if loaded).
 
 ## References
 

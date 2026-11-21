@@ -44,6 +44,44 @@ local function setup_config(opts)
     })
 end
 
+-- the rule buffer of a result buffer: the one it was last rendered from, else the
+-- loaded rule file next to it with the same name
+local function rule_buf_of_result(result_buf)
+    local rule_buf = refresh.rule_state_of_result(result_buf)
+    if rule_buf then
+        return rule_buf
+    end
+    local name = fn.fnamemodify(api.nvim_buf_get_name(result_buf), ':r') .. '.' .. config.naming.rule
+    local b = fn.bufnr(name)
+    if b ~= -1 and api.nvim_buf_is_loaded(b) then
+        return b
+    end
+end
+
+-- visual <Enter> in a result buffer: the selected text goes in or out of [highlight]
+local function toggle_selection_highlight()
+    local result_buf = api.nvim_get_current_buf()
+    local region = fn.getregion(fn.getpos('v'), fn.getpos('.'), { type = fn.mode() })
+    api.nvim_feedkeys(api.nvim_replace_termcodes('<Esc>', true, false, true), 'nx', false)
+    if #region ~= 1 then
+        vim.notify("[logana] only single line selections are supported", vim.log.levels.INFO)
+        return
+    end
+    if region[1] == '' then
+        return
+    end
+    local rule_buf = rule_buf_of_result(result_buf)
+    if not rule_buf then
+        vim.notify("[logana] no rule buffer found for this result", vim.log.levels.INFO)
+        return
+    end
+    rule.toggle_highlight(rule_buf, region[1], function(changed)
+        if changed ~= nil then
+            refresh.refresh_from_rule(rule_buf)
+        end
+    end)
+end
+
 local function setup_keybinding()
     if M._quit_auto then
         return
@@ -103,6 +141,8 @@ local function setup_keybinding()
         callback = function(ev)
             vim.keymap.set("n", config.key.result_jump, result.result_buffer_jump,
                 { buffer = ev.buf, noremap = true, silent = true, desc = "logana: results jump" })
+            vim.keymap.set("x", config.key.result_toggle_highlight, toggle_selection_highlight,
+                { buffer = ev.buf, noremap = true, silent = true, desc = "logana: toggle highlight of selection" })
 
             local group = api.nvim_create_augroup("logana_fold_" .. ev.buf, { clear = true })
             api.nvim_create_autocmd("BufWinEnter", {
