@@ -1,0 +1,294 @@
+*logana.txt*  Lightweight log analyzer for Neovim
+
+Author:  sheeaza
+License: MIT
+Repo:    https://github.com/sheeaza/logana.nvim
+
+==============================================================================
+CONTENTS                                                     *logana-contents*
+
+    1. Intro ............................................ |logana-intro|
+    2. Install .......................................... |logana-install|
+    3. Usage ............................................ |logana-usage|
+       Rule file ........................................ |logana-rule|
+       Refresh .......................................... |logana-refresh|
+       Result buffer .................................... |logana-result|
+       Folding .......................................... |logana-fold|
+       Source file colors ............................... |logana-source|
+       Hit counts ....................................... |logana-hit-count|
+    4. Config ........................................... |logana-config|
+    5. API .............................................. |logana-api|
+    6. Health ........................................... |logana-health|
+
+==============================================================================
+1. INTRO                                               *logana* *logana-intro*
+
+Write ripgrep args in a rule buffer, press <Enter>, and a result buffer lists
+the matching lines with the matches colored. Every rule uses ripgrep syntax
+and flags.
+
+==============================================================================
+2. INSTALL                                                    *logana-install*
+
+Needs Neovim built with LuaJIT (the default) and ripgrep.
+
+lazy.nvim: >lua
+    {
+        "sheeaza/logana.nvim",
+        config = function()
+            require("logana").setup({})
+        end,
+    }
+<
+packer.nvim: >lua
+    use({
+        "sheeaza/logana.nvim",
+        config = function()
+            require("logana").setup({})
+        end,
+    })
+<
+|logana.setup()| registers the rule/result filetypes, so load the plugin at
+startup rather than lazily on a command.
+
+==============================================================================
+3. USAGE                                                        *logana-usage*
+
+There is no command. Rule and result buffers are plain files, told apart by
+extension (see |logana-config-naming|).
+
+1. Open your log file(s).
+2. Open a rule file the usual way, e.g. `:vs app.logana_rule` (or |:e|,
+   |:tabe|, a session, a file picker). A new or empty rule buffer is filled
+   with a template.
+3. Write the rules (see |logana-rule|).
+4. Press <Enter> in the rule buffer. The results go to `app.logana_result`,
+   next to the rule file, and its window opens beside the rule window if it
+   isn't shown already. It lists `file: <path>` headers followed by
+   `<line>: <text>`.
+
+|:w| saves the rules, and opening the file later brings them back.
+
+------------------------------------------------------------------------------
+RULE FILE                                                        *logana-rule*
+
+>ini
+    [rg]
+    --smart-case
+    -e 'timeout'
+    -e 'connect'
+
+    [file]
+    # true: search only the files opened in nvim; false: rg searches cwd
+    opened_only = true
+
+    [highlight]
+    --smart-case
+    -i -e 'error'
+    -e 'retry' -e 'busy'
+
+    [fold]
+    logs/b.log
+<
+                                                              *logana-rule-rg*
+[rg]            ripgrep args. The matching lines of the files are listed in
+                the result buffer, every match in one color
+                (|hl-LoganaMatch|).
+
+                                                            *logana-rule-file*
+[file]          `opened_only = true` searches the files opened in Neovim,
+                `false` lets rg search cwd.
+
+                                                       *logana-rule-highlight*
+[highlight]     One ripgrep args list per line, matched against the result
+                lines. Each line gets its own color (|hl-LoganaHighlightN|);
+                a line may hold several patterns. A line with only flags (no
+                `-e`/`-f`) gets no color: its flags are put in front of every
+                pattern line, so above there are two colors,
+                `--smart-case -i -e 'error'` and
+                `--smart-case -e 'retry' -e 'busy'`. A line's own flags win
+                (`-i` overrides `--smart-case`).
+
+                                                            *logana-rule-fold*
+[fold]          The files folded in the result buffer, one per line. Kept in
+                sync with the result window (see |logana-fold|).
+
+Where [rg] and [highlight] colors overlap, the [highlight] one wins.
+
+------------------------------------------------------------------------------
+REFRESH                                                       *logana-refresh*
+
+<Enter> in the rule buffer only reruns what changed:
+- The search reruns if [rg]/[file] changed, a searched file changed on disk
+  (only checked with `opened_only = true`), or the result buffer was edited
+  or closed. With `opened_only = false`, changes under cwd can't be seen, so
+  <Enter> always reruns it.
+- Otherwise only the [highlight] colors are redone, and only if [highlight]
+  changed.
+
+Results load in the background: the first lines show at once, the rest are
+appended while you keep working. A spinner with the number of lines loaded so
+far shows at the right end of the rule window's last line. <Enter> while
+loading restarts the search if [rg]/[file] changed; otherwise the load goes on
+and uses the new [highlight] and [fold] when it's done.
+
+[highlight] colors are added to lines as they're drawn, so scrolling to new
+lines colors them a moment later.
+
+------------------------------------------------------------------------------
+RESULT BUFFER                                                  *logana-result*
+
+- <Enter> on a result line jumps to that line in the source file: in the
+  source file's window if the current tab has one, otherwise in the result
+  window.
+- Moving to another line moves the cursor of the source file's window along,
+  if the current tab has one, without leaving the result
+  (|logana-config-result_win|, `follow`).
+- Select text on one line in visual mode and press <Enter>: `-F -e '<text>'`
+  is added at the end of [highlight] (in `"` if the text has a `'`), matched
+  as is, not as a regex. Doing it again on the same text removes that line;
+  only lines that are exactly that rule count. Nothing is refreshed: press
+  <Enter> in the rule buffer to see the colors. If the line can't be written
+  (the text has both quotes) or rg rejects it with the section's flags, it
+  warns and adds nothing.
+- The result buffer is volatile: editing it doesn't refresh anything, and the
+  next refresh throws the edits away. Undo is off in it, so each refresh stays
+  fast with a large result. Edits meant to last go in the source file.
+
+------------------------------------------------------------------------------
+FOLDING                                                          *logana-fold*
+
+The result buffer has one fold per file, so |za|/|zc|/|zo|/|zM|/|zR| work on
+whole files. The folded files are kept in [fold], updated when you leave the
+result window or refresh, and saved with the rule file. If the section is
+missing, it is added the first time a file is folded. Editing [fold] by hand
+and pressing <Enter> applies it.
+
+------------------------------------------------------------------------------
+SOURCE FILE COLORS                                             *logana-source*
+
+A file listed in a result (a `file:` header) gets the [highlight] colors in
+its own windows too, not the [rg] one, only for the lines on screen. It keeps
+them in other tabs and with the result closed, until the rule buffer is wiped
+or a refresh no longer lists the file. If several rule buffers list it, the
+one refreshed last gives the rules. `highlight.hl_buf = false` turns it off.
+
+------------------------------------------------------------------------------
+HIT COUNTS                                                  *logana-hit-count*
+
+After a refresh, the end of each [rg] line with a `-e`/`-f` and each colored
+[highlight] line shows how many result lines it matches, in that rule's color
+(` … ` while counting, `!` if rg failed). Every result line is counted, not
+only the ones drawn. The flag-only lines of the section are shared by every
+rule; in [rg], lines without a pattern (e.g. `-g '*.log'`, paths) aren't
+counted. For a line with several patterns, the count is of the lines matching
+any of them. The counts move with edits to the rule buffer and are updated on
+the next refresh. `hit_count = false` turns them off.
+
+==============================================================================
+4. CONFIG                                                      *logana-config*
+
+|logana.setup()| merges its `opts` over the defaults in
+`lua/logana/defconfig.lua`.
+
+                                                        *logana-config-rg.cmd*
+rg.cmd                  Default: `'rg'`
+                        ripgrep executable.
+
+                                                       *logana-config-rg.args*
+rg.args                 Default: `{ '--no-config' }`
+                        Extra args for the search; the output format is set by
+                        logana.
+
+                                                   *logana-config-match_color*
+                                                              *hl-LoganaMatch*
+match_color             Default: bold white on gray
+                        [rg] color (`LoganaMatch`), any |nvim_set_hl()| spec.
+
+                                              *logana-config-highlight_colors*
+                                                         *hl-LoganaHighlightN*
+highlight_colors        Default: 10 fixed colors
+                        [highlight] colors (`LoganaHighlight1..N`), cycled.
+
+                                                       *logana-config-spinner*
+spinner                 Default: `{ frames = {...}, interval = 80 }`
+                        Loading spinner, `false` to turn off.
+
+                                                     *logana-config-hit_count*
+hit_count               Default: `true`
+                        Hit counts in the rule buffer (|logana-hit-count|).
+
+                                                     *logana-config-highlight*
+highlight.hl_buf        Default: `true`
+                        [highlight] colors in source file windows
+                        (|logana-source|).
+
+                                                        *logana-config-layout*
+layout.rule_pos         Default: `'top'`
+                        Where the rule window is: `'top'`, `'bottom'`,
+                        `'left'`, `'right'`.
+layout.rule_window      Default: `'20'`
+                        Rule window size, percent of the rule/result split.
+
+                                                    *logana-config-result_win*
+result_win.behavior     Default: `'split'`
+                        `'split'` the rule window, or `'override'`: show the
+                        result in it.
+result_win.follow       Default: `true`
+                        Move the source window's cursor with the result's.
+
+                                                        *logana-config-naming*
+naming.rule             Default: `'logana_rule'`
+naming.result           Default: `'logana_result'`
+                        File extensions, also the filetypes.
+
+                                                 *logana-config-rule_template*
+rule_template           Default: see `defconfig.lua`
+                        Text of a new rule buffer.
+
+                                                           *logana-config-key*
+key.rule_refresh        Default: `'<cr>'`
+                        Refresh, in the rule buffer.
+key.result_jump         Default: `'<cr>'`
+                        Jump to the source line, in the result buffer.
+key.result_toggle_highlight
+                        Default: `'<cr>'`
+                        Visual mode in the result buffer: toggle the selection
+                        in [highlight].
+
+Colors are fixed by default so they look the same with every colorscheme; use
+`link` to follow the theme: >lua
+    require("logana").setup({
+        match_color = { fg = "#ffffff", bg = "#8a8a8a" },
+        highlight_colors = {
+            { fg = "#000000", bg = "#ff8800" },
+            { link = "DiffAdd" },
+        },
+    })
+<
+Shorter extensions, to type less: >lua
+    -- :vs app.lr
+    require("logana").setup({ naming = { rule = "lr", result = "lres" } })
+<
+==============================================================================
+5. API                                                            *logana-api*
+
+                                                              *logana.setup()*
+require("logana").setup({opts})
+    See |logana-config|.
+
+                                                            *logana.refresh()*
+require("logana").refresh({rule_buf}, {on_done})
+    Same as <Enter> in {rule_buf}. Results load asynchronously; the optional
+    {on_done}() is called once they and their folds are applied ([highlight]
+    colors come as lines are drawn). It isn't called if the refresh fails,
+    finds no match, or is superseded by another refresh.
+
+==============================================================================
+6. HEALTH                                                      *logana-health*
+
+`:checkhealth logana` shows whether |logana.setup()| was called, the ripgrep
+version, and which ways of starting rg (`posix_spawn` or |vim.system()|) and
+passing its output (memfd or temp files in `stdpath("run")`) are in use.
+
+ vim:tw=78:ts=8:noet:ft=help:norl:

@@ -194,6 +194,7 @@ require("logana").setup({ naming = { rule = "lr", result = "lres" } })  -- :vs a
 
 ## Reference
 
+- `:h logana`: this README as Vim help ([doc/logana.txt](doc/logana.txt)).
 - [doc/DESIGN.md](doc/DESIGN.md): design, the data flow.
 - [tests/README.md](tests/README.md): running the tests and the benchmark, results.
 - [doc/TODO.md](doc/TODO.md) / [doc/DONE.md](doc/DONE.md): open and resolved items.

@@ -301,3 +301,7 @@ From a review of the modules after the split.
   Done: `lua/logana/health.lua`. Also warns when `setup()` wasn't called. Without
   posix_spawn or memfd it's info, not a warning: the fallbacks work, only slower.
   Test: no error or warning on linux.
+- [x] `doc/logana.txt`: vimdoc help (`:h logana`), from the README.
+  Done: same sections as the README (Install, Usage, Config, API, plus Health), a tag
+  per section, config option and highlight group. A README change needs the same one
+  there. `/doc/tags` (made by `:helptags`) in `.gitignore`.

@@ -2,10 +2,6 @@
 
 Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 
-## Packaging and docs
-
-- [ ] `doc/logana.txt`: vimdoc help (`:h logana`), from the README.
-
 ## Robustness
 
 - [ ] Tests for edge cases: CRLF logs, invalid UTF-8, very long lines, paths with spaces
