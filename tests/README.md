@@ -262,7 +262,7 @@ large      738898       5     342         248          57      802     6     803
 ```
 
 Level 1 scanned with `memchr`/`ffi.copy`, rg writing to a memfd instead of a pipe,
-the ranges in ffi arrays, the old result cleared with `:%delete _` (see `TODO.md`).
+the ranges in ffi arrays, the old result cleared with `:%delete _` (see `doc/DONE.md`).
 Another synthetic 500 MB log (8.8M shorter lines), `small` is `op 955`, `medium`
 `E Audio`, `large` `Display` (`CASES` edited), i5-12500H, ripgrep 15.2.0, Neovim
 0.12.5 (median of 5). rg alone takes ~640 ms of `large`'s level 1, on one core: one
