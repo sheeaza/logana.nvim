@@ -204,3 +204,5 @@ From a review of the modules after the split.
   an exclusion (rg has no per-pattern invert; decide how: a level 1 post-filter, or a
   separate `[exclude]` section run as a second rg over the result lines).~~: cancelled,
   not needed, not practical.
+- [ ] ~~On a `file: <path>` header, a key adds `-g '!<path>'` to `[rg]` to drop that
+  file.~~: cancelled, not needed now, done by hand in the rule.

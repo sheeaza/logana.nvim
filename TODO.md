@@ -66,10 +66,6 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
   (8.8M lines) in the source window: a screen at the top / middle / end colored in
   2.1 / 2.5 / 2.3 ms, only the drawn rows cached. Wiping a rule buffer redraws them too.
 
-## Rules from the result
-
-- [ ] On a `file: <path>` header, a key adds `-g '!<path>'` to `[rg]` to drop that file.
-
 ## Time
 
 - [ ] Merge several files by timestamp instead of listing them file by file (lnav does
