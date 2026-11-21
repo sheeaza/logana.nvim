@@ -52,6 +52,16 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
   used when no run is loading and the result isn't edited, else `search()`.
   `test-500m.log`, a 1.1M row result of one file, one follow at rows 2 / 550k / 1.1M:
   0.04 / 0.02 / 0.02 ms, with `search()` 0.03 / 22 / 44 ms.
+- [ ] `[highlight]` colors in the source file's window too, only for the lines on screen
+  (the source can be huge), the same lazy way as the result: rows ask for level 2 as
+  they're drawn, one rg per rule over their texts from stdin, cached per row.
+  - only level 2: the `[rg]` match color stays in the result
+  - only a buffer that is a source of a result shown in the window's tab (a `file:`
+    header of it, by full path); the rules of the first such result window in
+    `nvim_tabpage_list_wins` order
+  - the cache is dropped when those rules change, or the source buffer changes
+    (changedtick: edits, `:e`)
+  - `highlight.hl_buf = false` in the config turns it off
 - [ ] Quickfix export: put the result rows in the quickfix / location list (file, line,
   col of the first match), so `:cnext` and pickers work on them.
 
