@@ -1,171 +1,199 @@
 # logana.nvim
 
-Lightweight log analyzer for Neovim. Write ripgrep args under an `[rg]` section in a rule buffer, then press Enter in it to refresh a bound result buffer that lists the matching lines and highlights the matched text.
-
-## Features
-- Two-level filtering, both driven by the rule buffer and using ripgrep syntax:
-  1. `[rg]`: ripgrep args. Matching lines from the files are listed in the result buffer, and every match shares one color (`LoganaMatch`).
-  2. `[highlight]`: one ripgrep args list per line, matched against the result lines. Each line gets its own color (`LoganaHighlight1..N`).
-- Pressing `<Enter>` in the rule buffer only redoes what's needed (see [Refresh](#refresh)).
-- Pressing `<Enter>` on a result line jumps to that line in the source file: in the source file's window if the current tab has one (the first one), otherwise in the result window.
-- Moving to another line in the result buffer moves the cursor of the source file's window along, if the current tab has one, without leaving the result (`result_win.follow`).
-- A source file's window gets the `[highlight]` colors of its rule buffer too, only for the lines on screen; the `[rg]` color stays in the result (`highlight.hl_buf`).
-- Selecting text in the result buffer and pressing `<Enter>` adds it to `[highlight]`, or removes it if it's there (see [Toggling a highlight](#toggling-a-highlight)).
-- Each rule line shows how many result lines it matches (see [Hit counts](#hit-counts)).
+Lightweight log analyzer for Neovim. Write ripgrep args in a rule buffer, press
+`<Enter>`, and a result buffer lists the matching lines with the matches colored.
+Every rule uses ripgrep syntax and flags.
 
 ## Install
+
 Needs Neovim built with LuaJIT (the default) and ripgrep.
 
-- lazy.nvim:
-  {
+lazy.nvim:
+```lua
+{
     "yourname/logana.nvim",
     config = function()
-      require("logana").setup({})
+        require("logana").setup({})
     end,
-  }
+}
+```
 
-- packer.nvim:
-  use({
+packer.nvim:
+```lua
+use({
     "yourname/logana.nvim",
     config = function()
-      require("logana").setup({})
+        require("logana").setup({})
     end,
-  })
+})
+```
 
 `setup()` registers the rule/result filetypes, so load the plugin at startup rather
 than lazily on a command.
 
 ## Usage
+
 There is no command. Rule and result buffers are plain files, told apart by extension.
-1) Open your log file(s).
-2) Open a rule file the usual way, e.g. `:vs cam.logana_rule` (or `:e`, `:tabe`, a session,
-   a file picker). A new or empty rule buffer is filled with a template.
-3) Write the rules:
-  ```ini
-  [rg]
-  --smart-case
-  -e 'hw..?_cam'
-  -e 'resource'
 
-  [file]
-  # true: search only the files opened in nvim; false: rg searches cwd
-  opened_only = true
+1. Open your log file(s).
+2. Open a rule file the usual way, e.g. `:vs app.logana_rule` (or `:e`, `:tabe`, a
+   session, a file picker). A new or empty rule buffer is filled with a template.
+3. Write the rules (see [Rule file](#rule-file)).
+4. Press `<Enter>` in the rule buffer. The results go to `app.logana_result`, next to
+   the rule file, and its window opens beside the rule window if it isn't shown
+   already. It lists `file: <path>` headers followed by `<line>: <text>`.
 
-  [highlight]
-  # one color per line; a line may hold several patterns and rg flags.
-  # a line with only flags (no -e/-f) gets no color; its flags are added to
-  # every pattern line of this section.
-  --smart-case
-  -i -e 'error'
-  -e 'retry' -e 'busy'
-  ```
-   Here `--smart-case` holds only flags, so it is not a highlight of its own. It is put in
-   front of each pattern line, which gives two highlights with one color each:
-   - `--smart-case -i -e 'error'`
-   - `--smart-case -e 'retry' -e 'busy'`
+`:w` saves the rules, and opening the file later brings them back.
 
-   The shared flags come first, so a line's own flags win (`-i` above overrides
-   `--smart-case`). Flag-only lines in `[rg]` work the same way for the hit counts: each
-   pattern line is counted with them in front.
-4) Press `<Enter>` in the rule buffer. The results go to `cam.logana_result`, next to the
-   rule file, and its window opens beside the rule window if it isn't shown already (see
-   `layout` and `result_win` in `defconfig.lua`). It lists `file: <path>` headers followed
-   by `<line>: <text>`.
+### Rule file
 
-`:w` saves the rules, and opening the file later brings them back. To type less, pick
-shorter extensions:
-```lua
-require("logana").setup({ naming = { rule = "lr", result = "lres" } })  -- :vs cam.lr
+```ini
+[rg]
+--smart-case
+-e 'timeout'
+-e 'connect'
+
+[file]
+# true: search only the files opened in nvim; false: rg searches cwd
+opened_only = true
+
+[highlight]
+--smart-case
+-i -e 'error'
+-e 'retry' -e 'busy'
+
+[fold]
+logs/b.log
 ```
 
+- `[rg]`: ripgrep args. The matching lines of the files are listed in the result
+  buffer, every match in one color (`LoganaMatch`).
+- `[file]`: `opened_only = true` searches the files opened in Neovim, `false` lets rg
+  search cwd.
+- `[highlight]`: one ripgrep args list per line, matched against the result lines.
+  Each line gets its own color (`LoganaHighlight1..N`); a line may hold several
+  patterns. A line with only flags (no `-e`/`-f`) gets no color: its flags are put in
+  front of every pattern line, so above there are two colors,
+  `--smart-case -i -e 'error'` and `--smart-case -e 'retry' -e 'busy'`. A line's own
+  flags win (`-i` overrides `--smart-case`).
+- `[fold]`: the files folded in the result buffer, one per line. Kept in sync with
+  the result window (see [Folding](#folding)).
+
+Where `[rg]` and `[highlight]` colors overlap, the `[highlight]` one wins.
+
 ### Refresh
-Pressing `<Enter>` checks each level in turn and only reruns what changed:
-- Level 1 reruns (and then level 2) if the `[rg]`/`[file]` args changed, any searched file changed on disk (only checked when `opened_only = true`), or the result buffer was edited or closed.
-- Otherwise level 2 reruns, but only if `[highlight]` changed.
-- With `opened_only = false`, changes to files under cwd can't be detected, so pressing `<Enter>` without changing anything reruns both levels.
 
-The result buffer is volatile: editing it doesn't refresh anything, and the next refresh
-throws the edits away. Undo is off in it, so each refresh stays fast with a large
-result. Edits meant to last go in the source file.
+`<Enter>` in the rule buffer only reruns what changed:
+- The search reruns if `[rg]`/`[file]` changed, a searched file changed on disk (only
+  checked with `opened_only = true`), or the result buffer was edited or closed. With
+  `opened_only = false`, changes under cwd can't be seen, so `<Enter>` always reruns it.
+- Otherwise only the `[highlight]` colors are redone, and only if `[highlight]` changed.
 
-Level 2 runs only for the lines on screen: each line gets its `[highlight]` colors the
-first time it's drawn, from an rg run over just those lines, so scrolling to new lines
-colors them a moment later.
-
-The same goes for a source file, a file with a `file:` header in a rule buffer's
-result: in any window, its lines get the `[highlight]` colors (not the `[rg]` one) as
-they're drawn, so a huge log costs one screen at a time. The file is bound to the
-rule buffer, not to the result window: it keeps its colors in another tab or with the
-result closed, until the rule buffer is wiped or a refresh no longer lists the file.
-If several rule buffers list it, the one refreshed last gives the rules. The colors
-are redone when the rules change or the file's buffer does (edits, `:e`).
-`highlight.hl_buf = false` turns it off.
-
-Level 1 results load in the background: the first lines show right away and the rest
-are appended while you can keep working. While loading, a spinner and the number of
-lines loaded so far show in a small float at the right end of the rule window's last
-line, just above its statusline, so it works with any statusline plugin (`spinner` in the config, `false` to
-turn it off). `[highlight]` colors show on the loaded lines as you see them, folds are applied once loading is done. Pressing `<Enter>` while results are loading restarts the search
-if `[rg]`/`[file]` changed; otherwise the load continues and uses the new `[highlight]`
+Results load in the background: the first lines show at once, the rest are appended
+while you keep working. A spinner with the number of lines loaded so far shows at the
+right end of the rule window's last line. `<Enter>` while loading restarts the search
+if `[rg]`/`[file]` changed; otherwise the load goes on and uses the new `[highlight]`
 and `[fold]` when it's done.
 
-### Folding
-The result buffer has one fold per file, so `za`/`zc`/`zo`/`zM`/`zR` work on whole files.
-The folded files are kept in the rule buffer under `[fold]`, one per line. That section
-is updated when you leave the result window or refresh, and is saved with the rule file.
-If it is missing, it is added the first time a file is folded. Editing `[fold]` by hand
-and pressing `<Enter>` applies it.
+`[highlight]` colors are added to lines as they're drawn, so scrolling to new lines
+colors them a moment later.
 
-### Toggling a highlight
-In the result buffer, select text on one line in visual mode and press `<Enter>`
-(`key.result_toggle_highlight`): `-F -e '<text>'` is added at the end of the rule
-buffer's `[highlight]` section, so the text is matched as is, not as a regex. Nothing
-is refreshed: press `<Enter>` in the rule buffer to see the new colors. A text with a `'` is put in `"` instead. Doing it again on the same
-text removes that line. Only lines that are exactly that rule count, patterns inside
-other lines are left alone. If the line can't be written (the text has both quotes) or
-rg rejects it with the section's flags, it warns and adds nothing. The rule buffer is
-edited like any buffer, it isn't saved.
+### Result buffer
+
+- `<Enter>` on a result line jumps to that line in the source file: in the source
+  file's window if the current tab has one, otherwise in the result window.
+- Moving to another line moves the cursor of the source file's window along, if the
+  current tab has one, without leaving the result (`result_win.follow`).
+- Select text on one line in visual mode and press `<Enter>`: `-F -e '<text>'` is added
+  at the end of `[highlight]` (in `"` if the text has a `'`), matched as is, not as a
+  regex. Doing it again on the same text removes that line; only lines that are
+  exactly that rule count. Nothing is refreshed: press `<Enter>` in the rule buffer to
+  see the colors. If the line can't be written (the text has both quotes) or rg
+  rejects it with the section's flags, it warns and adds nothing.
+- The result buffer is volatile: editing it doesn't refresh anything, and the next
+  refresh throws the edits away. Undo is off in it, so each refresh stays fast with a
+  large result. Edits meant to last go in the source file.
+
+### Folding
+
+The result buffer has one fold per file, so `za`/`zc`/`zo`/`zM`/`zR` work on whole
+files. The folded files are kept in `[fold]`, updated when you leave the result window
+or refresh, and saved with the rule file. If the section is missing, it is added the
+first time a file is folded. Editing `[fold]` by hand and pressing `<Enter>` applies it.
+
+### Source file colors
+
+A file listed in a result (a `file:` header) gets the `[highlight]` colors in its own
+windows too, not the `[rg]` one, only for the lines on screen. It keeps them in other
+tabs and with the result closed, until the rule buffer is wiped or a refresh no longer
+lists the file. If several rule buffers list it, the one refreshed last gives the
+rules. `highlight.hl_buf = false` turns it off.
 
 ### Hit counts
-After a refresh, the end of each `[rg]` line with a `-e`/`-f` and of each `[highlight]`
-line that gets a color shows how many result lines it matches, in that rule's color
-(` … ` while counting, `!` if rg failed). Each rule is counted with its own rg run
-over all result lines, not only the ones drawn, in the background. The flags of the
-other lines in the section are shared by every rule, as level 2 does for `[highlight]`;
-in `[rg]`, lines without a pattern (e.g. `-g '*.log'`, paths) aren't counted. For a
-line with several patterns the count is of the lines matching any of them.
-`[rg]` counts are redone when level 1 reruns, `[highlight]` counts also when
-`[highlight]` changes. The counts are virtual text: they move with edits to the rule
-buffer and are updated on the next refresh. `hit_count = false` turns them off.
 
-## API
-- `require("logana").setup(opts)`: see `lua/logana/defconfig.lua` for all options.
-- `require("logana").refresh(rule_buf, on_done)`: same as pressing `<Enter>` in `rule_buf`.
-  Results load asynchronously; the optional `on_done()` is called once they and their
-  folds are applied (`[highlight]` colors come as lines are drawn). It isn't called if the refresh fails, finds no
-  match, or is superseded by another refresh.
+After a refresh, the end of each `[rg]` line with a `-e`/`-f` and each colored
+`[highlight]` line shows how many result lines it matches, in that rule's color
+(` … ` while counting, `!` if rg failed). Every result line is counted, not only the
+ones drawn. The flag-only lines of the section are shared by every rule; in `[rg]`,
+lines without a pattern (e.g. `-g '*.log'`, paths) aren't counted. For a line with
+several patterns, the count is of the lines matching any of them. The counts move with
+edits to the rule buffer and are updated on the next refresh. `hit_count = false`
+turns them off.
 
-## Highlight Customization
+## Config
+
+`setup(opts)` merges `opts` over the defaults in `lua/logana/defconfig.lua`:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `rg.cmd` | `'rg'` | ripgrep executable |
+| `rg.args` | `{ '--no-config' }` | extra args for the search; the output format is set by logana |
+| `match_color` | bold white on gray | `[rg]` color (`LoganaMatch`), any `nvim_set_hl` spec |
+| `highlight_colors` | 10 fixed colors | `[highlight]` colors (`LoganaHighlight1..N`), cycled |
+| `spinner` | `{ frames = {...}, interval = 80 }` | loading spinner, `false` to turn off |
+| `hit_count` | `true` | hit counts in the rule buffer |
+| `highlight.hl_buf` | `true` | `[highlight]` colors in source file windows |
+| `layout.rule_pos` | `'top'` | where the rule window is: `'top'`, `'bottom'`, `'left'`, `'right'` |
+| `layout.rule_window` | `'20'` | rule window size, percent of the rule/result split |
+| `result_win.behavior` | `'split'` | `'split'` the rule window, or `'override'`: show the result in it |
+| `result_win.follow` | `true` | move the source window's cursor with the result's |
+| `naming.rule` / `naming.result` | `'logana_rule'` / `'logana_result'` | file extensions, also the filetypes |
+| `rule_template` | see `defconfig.lua` | text of a new rule buffer |
+| `key.rule_refresh` | `'<cr>'` | refresh, in the rule buffer |
+| `key.result_jump` | `'<cr>'` | jump to the source line, in the result buffer |
+| `key.result_toggle_highlight` | `'<cr>'` | visual mode in the result buffer: toggle the selection in `[highlight]` |
+
+Colors, fixed by default so they look the same with every colorscheme; use `link` to
+follow the theme:
 ```lua
 require("logana").setup({
-    match_color = { fg = "#ffffff", bg = "#8a8a8a" }, -- level 1, LoganaMatch
-    highlight_colors = {                            -- level 2, LoganaHighlight1..N (cycled)
+    match_color = { fg = "#ffffff", bg = "#8a8a8a" },
+    highlight_colors = {
         { fg = "#000000", bg = "#ff8800" },
         { link = "DiffAdd" },
     },
 })
 ```
-Where both levels overlap, the level 2 color wins. The defaults are fixed colors
-(10 for level 2), the same with every colorscheme; use `link` to follow the theme.
 
-## Workflow Tips
-- Keep one pane on your log file (source buffer) while you iterate on patterns in the rule buffer.
-- Rule/result buffers are named files; `:w` them to keep your rules.
-
-## Tests
-```sh
-nvim --headless -u NONE -l tests/run.lua   # details: tests/README.md
+Shorter extensions, to type less:
+```lua
+require("logana").setup({ naming = { rule = "lr", result = "lres" } })  -- :vs app.lr
 ```
 
+## API
+
+- `require("logana").setup(opts)`: see [Config](#config).
+- `require("logana").refresh(rule_buf, on_done)`: same as `<Enter>` in `rule_buf`.
+  Results load asynchronously; the optional `on_done()` is called once they and their
+  folds are applied (`[highlight]` colors come as lines are drawn). It isn't called if
+  the refresh fails, finds no match, or is superseded by another refresh.
+
+## Reference
+
+- [doc/DESIGN.md](doc/DESIGN.md): design, the data flow.
+- [tests/README.md](tests/README.md): running the tests and the benchmark, results.
+- [doc/TODO.md](doc/TODO.md) / [doc/DONE.md](doc/DONE.md): open and resolved items.
+
 ## License
+
 MIT
