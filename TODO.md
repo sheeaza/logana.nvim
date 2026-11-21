@@ -31,8 +31,21 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
   586 -> 591 ms (noise); the counts are in 31 / 36 / 57 ms after the refresh. The
   memfd holds a copy of the result texts (shmem, not in `rss_MB`) until the next level
   1 run or the rule buffer is wiped.
-- [ ] Context on demand: a key in the result buffer shows the source lines around the
-  cursor's line (±N, config) in a float, read from the file, without rerunning level 1.
+- [ ] Context on demand: the source file's own window is the context, no float.
+  - `<cr>` on a result row: if the source file is not in a window of the current tab,
+    keep today's behavior (show it in the result window). If it is, go to that window
+    and put the cursor on the row's line / col, with `m'` first so `<C-o>` goes back
+  - Follow: moving to another line in the result window moves the cursor of that
+    source window too, without leaving the result window. Only when the result line
+    changes (not the col, and not on entering the window: `CursorMoved` fires then),
+    so after the user moves in the source window, going back to the result window
+    does not undo it until they move there. Never opens or loads a buffer, no jumplist
+  - Several windows on the same file: the first one in `nvim_tabpage_list_wins(0)`
+    order, never the result window itself (`override` mode)
+  - The `file:` header of a row: cache the header line numbers when the result is
+    written and binary search them, not `search('^file: ', 'bn')` per cursor move
+    (millions of lines up in a big one-file result)
+  - `result_follow = false` in the config turns follow off
 - [ ] Quickfix export: put the result rows in the quickfix / location list (file, line,
   col of the first match), so `:cnext` and pickers work on them.
 
