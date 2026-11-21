@@ -4,20 +4,24 @@ local M = {
         args = { "--no-config" }, -- extra args; the output format flags are set by logana
     },
 
-    -- level 1: every [rg] match shares this one color
-    match_color = {
-         link = "TermCursor",
-    },
+    -- level 1: every [rg] match shares this one color.
+    -- fixed colors (fg and bg), so they look the same with every colorscheme;
+    -- any nvim_set_hl spec works here, e.g. { link = "DiffAdd" } to follow the theme
+    match_color = { fg = "#ffffff", bg = "#8a8a8a", bold = true },
 
     -- level 2: one color per line under [highlight], cycling through this list
     -- if there are more lines than colors
     highlight_colors = {
-        { link = "IncSearch" },
-        { link = "DiffAdd" },
-        { link = "DiffChange" },
-        { link = "DiffText" },
-        { link = "Substitute" },
-        { link = "MatchParen" },
+        { fg = "#000000", bg = "#ffd75f" }, -- yellow
+        { fg = "#000000", bg = "#87d787" }, -- green
+        { fg = "#000000", bg = "#87afff" }, -- blue
+        { fg = "#000000", bg = "#ff8787" }, -- red
+        { fg = "#000000", bg = "#d7afff" }, -- purple
+        { fg = "#000000", bg = "#5fd7d7" }, -- cyan
+        { fg = "#000000", bg = "#ffaf5f" }, -- orange
+        { fg = "#000000", bg = "#ff87d7" }, -- pink
+        { fg = "#000000", bg = "#afd700" }, -- lime
+        { fg = "#000000", bg = "#d7af87" }, -- tan
     },
 
     -- shown in a float at the right end of the rule window's last line, above its

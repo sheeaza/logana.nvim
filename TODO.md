@@ -166,13 +166,16 @@ From a review of the modules after the split.
 
 ## Highlight
 
-- [ ] Better default colors, the same with every colorscheme. Now `match_color` links
+- [x] Better default colors, the same with every colorscheme. Now `match_color` links
   `TermCursor` and `highlight_colors` link `IncSearch`, `DiffAdd`, `DiffChange`,
   `DiffText`, `Substitute`, `MatchParen` (`defconfig.lua`): they change with the theme,
   and some barely stand out from the log text. Use fixed colors instead of links (both
   `fg` and `bg`, so the text stays readable on dark and light backgrounds), clearly
   distinct from each other: 10 for `highlight_colors`, and `match_color` along with
   them.
+  - done: black text on 10 light hues (yellow, green, blue, red, purple, cyan, orange,
+    pink, lime, tan); `match_color` bold white on gray, so it stays behind them
+  - a `ColorScheme` autocmd defines the groups again (`:hi clear` empties them)
 - [x] In a result buffer, visual select some text, <Enter>: toggle a highlight for it
   through `[highlight]` in the rule buffer: if there's no line for the text, add
   `-e '<text>'` under `[highlight]`, else remove that line, then rerun level 2. The

@@ -222,7 +222,7 @@ local function match_ranges(bufnr, row)
     return out
 end
 
-local function setup_highlights()
+local function define_highlights()
     config.hi_match_group = "LoganaMatch"
     local match_hl = vim.tbl_extend("force", {}, config.match_color)
     match_hl.default = true
@@ -236,6 +236,16 @@ local function setup_highlights()
         pcall(api.nvim_set_hl, 0, name, hl)
         config.hi_group_names[i] = name
     end
+end
+
+-- :colorscheme runs :hi clear, which empties the Logana* groups: define them
+-- again. Extmarks only hold the group names, so open results get their colors back
+local function setup_highlights()
+    define_highlights()
+    api.nvim_create_autocmd("ColorScheme", {
+        group = api.nvim_create_augroup("logana_highlights", { clear = true }),
+        callback = define_highlights,
+    })
 end
 
 M.by_buf = RESULT_HIGHLIGHTS

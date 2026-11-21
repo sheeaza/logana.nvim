@@ -117,6 +117,15 @@ test("opening a new rule file fills the template, outside undo history", functio
     eq(vim.split(L.config.rule_template, "\n"), api.nvim_buf_get_lines(rule, 0, -1, false), "after undo")
 end)
 
+test("default colors are fixed and survive :colorscheme", function()
+    local function hl(name) return api.nvim_get_hl(0, { name = name }) end
+    eq(0xffd75f, hl("LoganaHighlight1").bg, "LoganaHighlight1 bg")
+    eq(10, #L.config.hi_group_names, "10 level 2 groups")
+    vim.cmd("colorscheme default")
+    eq(0x8a8a8a, hl("LoganaMatch").bg, "LoganaMatch bg after :colorscheme")
+    eq(0x000000, hl("LoganaHighlight10").fg, "LoganaHighlight10 fg after :colorscheme")
+end)
+
 test("opening an existing rule file keeps its content", function()
     setup_session()
     vim.fn.writefile({ "[rg]", "-e 'busy'" }, "saved.logana_rule")

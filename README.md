@@ -111,14 +111,15 @@ edited like any buffer, it isn't saved.
 ## Highlight Customization
 ```lua
 require("logana").setup({
-    match_color = { link = "TermCursor" },          -- level 1, LoganaMatch
+    match_color = { fg = "#ffffff", bg = "#8a8a8a" }, -- level 1, LoganaMatch
     highlight_colors = {                            -- level 2, LoganaHighlight1..N (cycled)
         { fg = "#000000", bg = "#ff8800" },
         { link = "DiffAdd" },
     },
 })
 ```
-Where both levels overlap, the level 2 color wins.
+Where both levels overlap, the level 2 color wins. The defaults are fixed colors
+(10 for level 2), the same with every colorscheme; use `link` to follow the theme.
 
 ## Workflow Tips
 - Keep one pane on your log file (source buffer) while you iterate on patterns in the rule buffer.
