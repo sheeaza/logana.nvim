@@ -64,11 +64,34 @@ local function rule_buf_of_result(result_buf)
     end
 end
 
--- visual <Enter> in a result buffer: the selected text goes in or out of [highlight],
--- and the colors follow. only level 2 reruns, not a full refresh
+-- the rule args of the [highlight] color shown where the selection is, the one
+-- drawn on top if several (the last). nil if none, or the row's colors aren't in
+-- yet: then none is shown either
+local function rule_under_selection(result_buf, pos)
+    local hls = highlight.by_buf[result_buf]
+    local s, e = pos[1][1], pos[1][2]
+    local marks = hls and hls.hl[s[2] - 1]
+    if not marks then
+        return nil
+    end
+    -- getregionpos: 1-based, the end on the last byte; marks: 0-based, end exclusive
+    local from, to = s[3] - 1, e[3]
+    for k = #marks, 1, -1 do
+        local m = marks[k]
+        if m[1] <= from and to <= m[2] then
+            return hls.hl_rules[m[3]]
+        end
+    end
+end
+
+-- visual <Enter> in a result buffer: inside a [highlight] color, its line is
+-- removed; else the selected text goes in or out of [highlight]. the colors follow,
+-- only level 2 reruns, not a full refresh
 local function toggle_selection_highlight()
     local result_buf = api.nvim_get_current_buf()
-    local region = fn.getregion(fn.getpos('v'), fn.getpos('.'), { type = fn.mode() })
+    local opts = { type = fn.mode() }
+    local region = fn.getregion(fn.getpos('v'), fn.getpos('.'), opts)
+    local pos = fn.getregionpos(fn.getpos('v'), fn.getpos('.'), opts)
     api.nvim_feedkeys(api.nvim_replace_termcodes('<Esc>', true, false, true), 'nx', false)
     if #region ~= 1 then
         vim.notify("[logana] only single line selections are supported", vim.log.levels.INFO)
@@ -81,6 +104,12 @@ local function toggle_selection_highlight()
     if not rule_buf then
         vim.notify("[logana] no rule buffer found for this result", vim.log.levels.INFO)
         return
+    end
+    -- matched by args, not the color's line number: the rule buffer may have changed
+    -- since the colors were computed. no longer there: toggle the text instead
+    local args = rule_under_selection(result_buf, pos)
+    if args and rule.remove_highlight_rule(rule_buf, args) then
+        return refresh.refresh_highlight(rule_buf)
     end
     rule.toggle_highlight(rule_buf, region[1], function(changed)
         if changed ~= nil then

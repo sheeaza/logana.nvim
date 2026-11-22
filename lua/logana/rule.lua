@@ -387,7 +387,32 @@ local function toggle_highlight(rule_buf, text, on_done)
     end
 end
 
+-- removes the [highlight] lines whose rule is `rule_args` (as parse_rule_buf makes
+-- it: the flag-only lines' args, then the line's), true if there were some
+local function remove_highlight_rule(rule_buf, rule_args)
+    local _, _, shared = find_highlight(rule_buf, nil)
+    local lines = api.nvim_buf_get_lines(rule_buf, 0, -1, false)
+    local section, found = '', {}
+    for i, l in ipairs(lines) do
+        local s = l:gsub("%s+$", "")
+        local cur_section = s:match("^%s*%[(.+)%]%s*$")
+        if cur_section then
+            section = cur_section
+        elseif section == 'highlight' and not s:match("^%s*$") and not s:match("^%s*#") then
+            local args = split_with_quotes(s)
+            if has_pattern(args) and vim.deep_equal(vim.list_extend(vim.list_slice(shared), args), rule_args) then
+                table.insert(found, i)
+            end
+        end
+    end
+    for j = #found, 1, -1 do
+        api.nvim_buf_set_lines(rule_buf, found[j] - 1, found[j], false, {})
+    end
+    return #found > 0
+end
+
 M.get_runtime_opts = get_runtime_opts
 M.toggle_highlight = toggle_highlight
+M.remove_highlight_rule = remove_highlight_rule
 M.initialize_rule_buffer = initialize_rule_buffer
 return M

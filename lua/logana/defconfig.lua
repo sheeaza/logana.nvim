@@ -117,7 +117,7 @@ opened_only = true
         rule_refresh = '<cr>',
         result_jump = '<cr>',
         -- visual mode in a result buffer: add the selected text to [highlight], or
-        -- remove it if it's there
+        -- remove it if it's there, or the line of the color the selection lies in
         result_toggle_highlight = '<cr>',
     },
 }

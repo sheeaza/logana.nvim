@@ -332,6 +332,52 @@ test("visual <Enter> recolors without rerunning an edited [rg] or dropping resul
         highlighted())
 end)
 
+test("visual <Enter> inside a [highlight] color removes that rule's line", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" }, { "--smart-case", "-e 'error'", "-e 'retry' -e 'busy'" })
+    refresh(rule)
+    eq({ "match:1:resource", "hl:1:ERROR:1", "hl:1:busy:2", "match:2:resource", "hl:2:retry:2" },
+        highlighted())
+    toggle_selection(rule, 2, 8, "vl")    -- "RR" of "1: cam ERROR ..."
+    eq({ "--smart-case", "-e 'retry' -e 'busy'" }, hl_section(rule))
+    -- the whole line goes, its other patterns too
+    highlighted()
+    toggle_selection(rule, 2, 22, "v3l")  -- "busy"
+    eq({ "--smart-case" }, hl_section(rule))
+    eq({ "match:1:resource", "match:2:resource" }, highlighted())
+end)
+
+test("visual <Enter> inside overlapping colors removes the one drawn on top", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" }, { "-e 'ERROR'", "-e 'RRO'" })
+    refresh(rule)
+    eq({ "match:1:resource", "hl:1:ERROR:1", "hl:1:RRO:2", "match:2:resource" }, highlighted())
+    toggle_selection(rule, 2, 9, "v")     -- "R" in both
+    eq({ "-e 'ERROR'" }, hl_section(rule))
+    eq({ "match:1:resource", "hl:1:ERROR:1", "match:2:resource" }, highlighted())
+    toggle_selection(rule, 2, 9, "v")
+    eq({}, hl_section(rule))
+end)
+
+test("visual <Enter> inside a color finds its line after the rule buffer changed", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'resource'" }, { "-e 'ERROR'", "-e 'busy'" })
+    refresh(rule)
+    highlighted()
+    local lines = api.nvim_buf_get_lines(rule, 0, -1, false)
+    local i = vim.fn.index(lines, "[highlight]")
+    api.nvim_buf_set_lines(rule, i + 1, i + 1, false, { "# note", "-e 'retry'" })
+    toggle_selection(rule, 2, 23, "v")    -- "u" of "busy"
+    eq({ "# note", "-e 'retry'", "-e 'ERROR'" }, hl_section(rule))
+    -- the color's rule is gone from the rule buffer: the text is toggled
+    highlighted()
+    lines = api.nvim_buf_get_lines(rule, 0, -1, false)
+    i = vim.fn.index(lines, "-e 'ERROR'")
+    api.nvim_buf_set_lines(rule, i, i + 1, false, { "-i -e 'error'" })
+    toggle_selection(rule, 2, 7, "v4l")
+    eq({ "# note", "-e 'retry'", "-i -e 'error'", "-F -e 'ERROR'" }, hl_section(rule))
+end)
+
 test("visual <Enter> over several lines only shows a message", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
