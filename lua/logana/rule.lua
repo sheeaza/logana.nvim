@@ -178,6 +178,147 @@ local function parse_rule_buf(rule_buf)
     return rule
 end
 
+-- short rg flags whose value is the rest of the cluster or the next arg
+local SHORT_VALUE = {}
+for c in ('ABCdEefgjmMrtT'):gmatch('.') do
+    SHORT_VALUE[c] = true
+end
+
+-- the -g/--glob/--iglob globs of rg args, in order: { glob, icase }.
+-- --glob-case-insensitive makes -g globs case insensitive too
+local function collect_globs(args)
+    local globs, icase_all = {}, false
+    local i = 1
+    while i <= #args do
+        local a = args[i]
+        local long, val = a:match('^%-%-([%w-]+)=(.*)$')
+        long = long or a:match('^%-%-([%w-]+)$')
+        if long then
+            if long == 'glob' or long == 'iglob' then
+                if not val then
+                    i = i + 1
+                    val = args[i]
+                end
+                if val then
+                    table.insert(globs, { val, long == 'iglob' })
+                end
+            elseif long == 'glob-case-insensitive' then
+                icase_all = true
+            elseif long == 'no-glob-case-insensitive' then
+                icase_all = false
+            elseif VALUE_FLAGS[a] then
+                i = i + 1
+            end
+        elseif a:match('^%-[^-]') then
+            -- a short cluster like '-ig' '*.log' or '-g*.log'
+            for j = 2, #a do
+                local c = a:sub(j, j)
+                if SHORT_VALUE[c] then
+                    local v = a:sub(j + 1)
+                    if v == '' then
+                        i = i + 1
+                        v = args[i]
+                    end
+                    if c == 'g' and v then
+                        table.insert(globs, { v, false })
+                    end
+                    break
+                end
+            end
+        end
+        i = i + 1
+    end
+    for _, g in ipairs(globs) do
+        g[2] = g[2] or icase_all
+    end
+    return globs
+end
+
+-- an rg glob as a matcher of cwd relative paths, gitignore style: a glob without
+-- '/' matches a name in any directory, one with '/' the path from cwd ('/' in
+-- front anchors it, as rg), one ending in '/' only dirs
+local function glob_matcher(glob, icase)
+    local neg = glob:sub(1, 1) == '!'
+    if neg then
+        glob = glob:sub(2)
+    end
+    local dir_only = glob:sub(-1) == '/'
+    if dir_only then
+        glob = glob:sub(1, -2)
+    end
+    if not glob:find('/') then
+        glob = '**/' .. glob
+    end
+    glob = glob:gsub('^/', '')
+    local ok, pat = pcall(vim.glob.to_lpeg, icase and glob:lower() or glob)
+    if not ok then
+        return nil
+    end
+    return {
+        neg = neg,
+        match = function(path, is_dir)
+            return (is_dir or not dir_only) and pat:match(icase and path:lower() or path) ~= nil
+        end,
+    }
+end
+
+-- whether the last glob matching path is a '!' one (nil: none matches)
+local function last_match_neg(matchers, path, is_dir)
+    for k = #matchers, 1, -1 do
+        if matchers[k].match(path, is_dir) then
+            return matchers[k].neg
+        end
+    end
+    return nil
+end
+
+-- the files rg would search with these globs had it found them walking cwd
+-- (rg doesn't apply -g to paths it's given). as rg: a dir whose last matching
+-- glob is a '!' one is skipped with all under it; then the last glob matching
+-- the file decides, and with any non '!' glob a file matching none is dropped.
+-- a non '!' glob matching a dir doesn't take the files under it
+local function filter_by_globs(files, args)
+    local matchers, any_pos = {}, false
+    for _, g in ipairs(collect_globs(args)) do
+        local m = glob_matcher(g[1], g[2])
+        if m then
+            table.insert(matchers, m)
+            any_pos = any_pos or not m.neg
+        end
+    end
+    if #matchers == 0 then
+        return files
+    end
+    local out = {}
+    for _, f in ipairs(files) do
+        local path = f:gsub('\\', '/'):gsub('^%./', '')
+        local keep = true
+        local from = 1
+        while keep do
+            local slash = path:find('/', from, true)
+            if not slash then
+                break
+            end
+            if slash > 1 and last_match_neg(matchers, path:sub(1, slash - 1), true) then
+                keep = false
+            end
+            from = slash + 1
+        end
+        if keep then
+            local neg = last_match_neg(matchers, path, false)
+            if neg == nil then
+                keep = not any_pos
+            else
+                keep = not neg
+            end
+        end
+        if keep then
+            table.insert(out, f)
+        end
+    end
+    return out
+end
+
 local function get_valid_opened_files()
     local files = {}
     local rule_ft = config.naming.rule
@@ -224,6 +365,11 @@ local function get_runtime_opts(rule_buf)
         local files = get_valid_opened_files()
         if next(files) == nil then
             vim.notify("[logana] no valid files opened", vim.log.levels.INFO)
+            return nil, {}
+        end
+        files = filter_by_globs(files, vim.list_extend(vim.list_slice(user_args), rule.rg.cmd))
+        if next(files) == nil then
+            vim.notify("[logana] no opened file passes the -g globs", vim.log.levels.INFO)
             return nil, {}
         end
         vim.list_extend(args, files)

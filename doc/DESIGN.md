@@ -108,7 +108,8 @@ the GC re-mark millions of objects while a large result streamed in.
 
 - `rg cmd` is everything level 1 passes to rg: the `[rg]` lines, `config.rg.args`,
   the output format (`level1.ARGS`), the rule/result excludes, and with
-  `opened_only` the opened files as paths. The files' size and mtime only go in
+  `opened_only` the opened files as paths, after the `-g`/`--glob`/`--iglob` globs
+  are applied to them in Lua (rg skips globs for paths it's given). The files' size and mtime only go in
   `match_sig` with `opened_only`; with a directory search, a refresh where nothing
   else changed reruns level 1.
 - Computed on every refresh, then compared with the refresh state:

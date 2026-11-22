@@ -666,6 +666,48 @@ test("opened_only = false: nothing changed reruns level 1, [highlight] change on
     eq({ "match:1:resource", "match:2:resource", "hl:2:retry:1" }, highlighted())
 end)
 
+-- the files listed in the result, sorted
+local function result_files()
+    local out = {}
+    for _, line in ipairs(result_lines()) do
+        local file = line:match("^file: (.*)")
+        if file then
+            table.insert(out, file)
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+test("-g globs pick the searched files, with opened_only = true and false", function()
+    local rule = setup_session()
+    vim.fn.mkdir("logs/old", "p")
+    for _, f in ipairs({ "b.txt", "logs/c.log", "logs/old/d.log", "E.LOG" }) do
+        vim.fn.writefile(LOG, f)
+        vim.fn.bufload(vim.fn.bufadd(f))
+    end
+    local cases = {
+        { { "-g '!*.log'" }, { "E.LOG", "b.txt" } },
+        { { "--iglob='!*.log'" }, { "b.txt" } },
+        { { "-g '*.log'", "-g '!logs/old'" }, { "a.log", "logs/c.log" } },
+        { { "-g 'logs/**'" }, { "logs/c.log", "logs/old/d.log" } },
+        { { "-g 'logs/*.log'" }, { "logs/c.log" } },
+        { { "-g '!logs/'" }, { "E.LOG", "a.log", "b.txt" } },
+        { { "-g '!old'" }, { "E.LOG", "a.log", "b.txt", "logs/c.log" } },
+        { { "-g '/*.log'" }, { "a.log" } },
+        { { "-g '*.{txt,LOG}'" }, { "E.LOG", "b.txt" } },
+        { { "-g '!*.log'", "-g 'a.log'" }, { "a.log" } },
+    }
+    for _, opened_only in ipairs({ true, false }) do
+        for _, c in ipairs(cases) do
+            local rg = vim.list_extend({ "-e 'resource'" }, c[1])
+            set_rule(rule, rg, {}, opened_only)
+            refresh(rule)
+            eq(c[2], result_files(), table.concat(c[1], " ") .. ", opened_only = " .. tostring(opened_only))
+        end
+    end
+end)
+
 test("level 2 columns are right with multibyte text and ':' in lines", function()
     local rule = setup_session()
     vim.fn.writefile({ "日本: resource a:b busy", "x resource 日本 busy" }, "a.log")
