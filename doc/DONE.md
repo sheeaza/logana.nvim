@@ -383,3 +383,19 @@ From a review of the modules after the split.
   match, an rg error, rg failing to start, or the rule buffer wiped), so edits can be
   undone until the next refresh, which drops their history. Synthetic log, median of
   5, gate passed: `large` level1 389 -> 369 ms, total 391 -> 371, rss_MB 193 -> 193.
+- [x] Fixed file order in the result, rg on all cores. One rg writes each file's matches
+  when its thread is done with it, so the order changed between refreshes; rg has no
+  ordered parallel mode (`--sort path` is single-threaded, 2.5-3.4x slower on 3213
+  files), and holding back early blocks can't tell a file without matches from one not
+  searched yet. Done: the file list (opened files in buffer order, or a directory
+  search's `rg --files`, sorted by path) is split into ~2 chunks per core, each
+  searched by its own `rg -j1` (keeps the given order) into its own memfd, one rg per
+  core at a time; the pump reads them in order, an rg's exit telling its chunk is
+  complete. 1, 2 and 4 chunks per core were tried; 1 core's worth stalled the pump on
+  one slow chunk, 4 paid a process start per wave. Synthetic log, median of 5, against
+  the commit before: one 500 MB file passes the gate (`large` level1 349 -> 366 ms);
+  the same split into 3213 files, ~10% slower (`small` level1 26 -> 41, `medium`
+  85 -> 100, `large` 339 -> 371 ms, `first` +7-15 ms: listing the files takes 5-13 ms,
+  fixed chunks balance worse than rg's own threads), accepted for the fixed order;
+  the 500 MB file first plus the 3213 files passes (`large` 888 -> 701 ms, noisy).
+  `rss_MB` unchanged: one read buffer for all the runs' memfds, not 1 MB each.

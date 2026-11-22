@@ -13,6 +13,7 @@ local spinner = require('logana.spinner')
 local process = require('logana.proc')
 local count = require('logana.count')
 local config = require('logana.config')
+local chunks = require('logana.chunks')
 
 local M = {}
 
@@ -155,12 +156,53 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
     st.texts = config.hit_count and scan.open_texts() or nil
     job.parser.texts = st.texts ~= nil
 
+    -- job.runs: the rg runs, read in order, job.cur the one being read:
+    -- { args, proc, src (its memfd, or nil: rg writes to a pipe), exit (its result), closed }
+    job.runs, job.cur = {}, 1
+    local function close_run(run)
+        if run.src and not run.closed then
+            run.closed = true
+            scan.close_output(run.src)
+        end
+    end
+    -- stops the job: the runs still going are killed, their memfds closed when they
+    -- exit (the job is no longer current then); the others' memfds now
+    function job.abort()
+        if job.lister and not job.listed then
+            pcall(job.lister.kill, job.lister, 15)
+        end
+        for _, run in ipairs(job.runs) do
+            if run.exit then
+                close_run(run)
+            elseif run.proc then
+                pcall(run.proc.kill, run.proc, 15)
+            end
+        end
+    end
+    -- the runs' results as one rg's: an error in any, else a match in any
+    local function result_of_runs()
+        local res, errs = { code = 1 }, {}
+        for _, run in ipairs(job.runs) do
+            local r = run.exit
+            if r.code == 2 then
+                res.code = 2
+            elseif r.code == 0 and res.code ~= 2 then
+                res.code = 0
+            end
+            if r.stderr and r.stderr ~= '' then
+                errs[#errs + 1] = r.stderr
+            end
+        end
+        res.stderr = #errs > 0 and table.concat(errs, '\n') or nil
+        return res
+    end
+
     local function done(res)
         job.finished = true
         st.job = nil
         scan.release()
-        if job.src then
-            scan.close_output(job.src)
+        for _, run in ipairs(job.runs) do
+            close_run(run)
         end
         job.stop_spinner()
         if res.code == 2 then
@@ -169,7 +211,9 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         if not job.started then
             undo_restore(st)
             count.stop_all(rule_buf, st)
-            if res.code == 1 then
+            -- 0: files given by path are searched as with --binary, a binary one
+            -- matching only gives a notice line, no result line
+            if res.code ~= 2 then
                 vim.notify(("[logana] cmd[%s], no match found"):format(table.concat(ropts.args_common, ' ')),
                     vim.log.levels.INFO)
             end
@@ -246,10 +290,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         if not api.nvim_buf_is_valid(result_buf) then
             st.job = nil
             job.stop_spinner()
-            pcall(job.proc.kill, job.proc, 15)
-            if job.exit and job.src then
-                scan.close_output(job.src) -- else the exit callback does
-            end
+            job.abort()
             return
         end
 
@@ -257,10 +298,23 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         local p = job.parser
         -- more: there's output left to scan now. drained: rg is done and all of it scanned
         local more, drained
-        if job.src then
-            local exited = job.exit
-            more = scan.scan_output(job.src, p, BATCH_BYTES) == BATCH_BYTES
-            drained = exited and not more
+        local run = job.runs[job.cur]
+        if run.src then
+            more = scan.scan_output(run.src, p, BATCH_BYTES) == BATCH_BYTES
+            if run.exit and not more then
+                -- this run's files are all in, the next run's come next
+                if job.cur < #job.runs then
+                    close_run(run)
+                    job.cur = job.cur + 1
+                    -- one read buffer for all: only one is read at a time, and rg
+                    -- ends its output with a whole line
+                    local nxt = job.runs[job.cur].src
+                    nxt.buf, nxt.cap = run.src.buf, run.src.cap
+                    more = true
+                else
+                    drained = true
+                end
+            end
         else
             -- job.rest: the pieces of a partial last line, no '\n' in them. at least
             -- one chunk is taken, also when a line longer than a batch is pending
@@ -286,7 +340,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
                 job.rest, job.rest_size = parts, size
             end
             more = job.head <= job.tail
-            drained = job.exit and not more
+            drained = run.exit and not more
         end
         local t1 = now_ms()
         if p.o > 0 and (p.o >= BATCH_BYTES or not job.started or t1 - job.flushed >= FLUSH_MS or drained) then
@@ -301,8 +355,8 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         if more then
             schedule_pump()
         elseif drained then
-            done(job.exit)
-        elseif job.src or p.o > 0 then
+            done(result_of_runs())
+        elseif run.src or p.o > 0 then
             -- memfd: nothing tells when rg wrote more, look again shortly. pipe: rg
             -- paused, show what's collected without waiting for more
             if not job.wait_timer then
@@ -310,47 +364,118 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
                 vim.defer_fn(function()
                     job.wait_timer = false
                     schedule_pump()
-                end, job.src and POLL_MS or FLUSH_MS)
+                end, run.src and POLL_MS or FLUSH_MS)
             end
         end
     end
 
+    local function failed()
+        st.job = nil
+        job.stop_spinner()
+        job.abort()
+        undo_restore(st)
+        vim.notify("[logana] failed to execute ripgrep", vim.log.levels.WARN)
+    end
+
+    -- starts the next run of job.runs not started yet, if any: at most chunks.count()
+    -- run at once, the next one starts when one exits. false if it couldn't.
     -- not text = true: its '\r\n' gsub over the whole output cost about as much as rg.
     -- a '\r' line ending is dropped by scan_batch.
     -- both callbacks run in a fast event context, they only queue work for pump
-    job.src = process.enabled and scan.open_output() or nil
-    local ok, proc = pcall(process.system, ropts.args_common, {
-        stdout_fd = job.src and job.src.fd,
-        stdout = not job.src and function(_, data)
-            if data and st.gen == gen then
-                job.tail = job.tail + 1
-                job.chunks[job.tail] = data
-                schedule_pump()
-            end
-        end or nil,
-    }, function(res)
-        vim.schedule(function()
-            if st.gen == gen and st.job == job then
-                job.exit = res
-                schedule_pump()
-            elseif job.src then
-                scan.close_output(job.src) -- stopped or replaced, nothing reads it
-            end
-        end)
-    end)
-    if not ok or not proc then
-        if job.src then
-            scan.close_output(job.src)
+    local start_next
+    start_next = function()
+        local run = job.runs[job.next_run]
+        if not run then
+            return true
         end
-        st.job = nil
-        job.stop_spinner()
-        undo_restore(st)
-        vim.notify("[logana] failed to execute ripgrep", vim.log.levels.WARN)
-        return
+        job.next_run = job.next_run + 1
+        if job.chunked then
+            run.src = scan.open_output()
+            if not run.src then
+                run.exit = {}
+                return false
+            end
+        end
+        local src = run.src
+        local ok, proc = pcall(process.system, run.args, {
+            stdout_fd = src and src.fd,
+            stdout = not src and function(_, data)
+                if data and st.gen == gen then
+                    job.tail = job.tail + 1
+                    job.chunks[job.tail] = data
+                    schedule_pump()
+                end
+            end or nil,
+        }, function(res)
+            vim.schedule(function()
+                if st.gen == gen and st.job == job then
+                    run.exit = res
+                    if not start_next() then
+                        failed()
+                        return
+                    end
+                    schedule_pump()
+                else
+                    close_run(run) -- stopped or replaced, nothing reads it
+                end
+            end)
+        end)
+        if not ok or not proc then
+            run.exit = {} -- abort closes its memfd
+            return false
+        end
+        run.proc = proc
+        return true
     end
-    job.proc = proc
-    if job.src then
-        schedule_pump() -- it polls the memfd from now on
+
+    -- the runs: an rg -j1 per chunk of files (chunks.lua), with base (the args
+    -- without paths), else one rg searching them all, with output in the order its
+    -- threads finish the files. by_size: split them by bytes, else by number
+    local function start(files, base, by_size)
+        local list = files and #files > 1 and chunks.split(base, files, by_size)
+        if list and #list > 1 then
+            job.chunked = true
+            for k, args in ipairs(list) do
+                job.runs[k] = { args = args }
+            end
+        else
+            local src = process.enabled and scan.open_output() or nil
+            job.runs[1] = { args = ropts.args_common, src = src }
+        end
+        job.next_run = 1
+        for _ = 1, job.chunked and chunks.count() or 1 do
+            if not start_next() then
+                failed()
+                return
+            end
+        end
+        if job.runs[1].src then
+            schedule_pump() -- it polls the memfds from now on
+        end
+    end
+
+    local base, given = rule.without(ropts.search_args, 'path')
+    -- chunks need posix_spawn and memfds, rg's output read from each in turn
+    if not process.enabled or not scan.has_memfd() or chunks.user_ordered(base) then
+        start()
+    elseif ropts.opened then
+        -- paths in [rg] are searched along with the opened files, by one rg as before
+        start(not given and ropts.opened or nil, base, true)
+    else
+        -- a directory search: the files it searches, listed first
+        local ok, lister = pcall(process.system, rule.files_args(ropts.search_args), {}, function(res)
+            vim.schedule(function()
+                job.listed = true
+                if st.gen == gen and st.job == job then
+                    start(res.code == 0 and chunks.parse_files(res.stdout or '') or nil, base)
+                end
+            end)
+        end)
+        if ok and lister then
+            job.lister = lister
+        else
+            start()
+        end
     end
 end
 
@@ -382,7 +507,7 @@ local function refresh_from_rule(rule_buf, on_done)
     end
     if st.job then
         st.job.stop_spinner()
-        pcall(st.job.proc.kill, st.job.proc, 15)
+        st.job.abort()
         st.job = nil
     end
 
@@ -444,7 +569,7 @@ local function forget(buf)
     if st and st.job then
         st.gen = st.gen + 1 -- the run's callbacks see they're stale
         st.job.stop_spinner()
-        pcall(st.job.proc.kill, st.job.proc, 15)
+        st.job.abort()
     end
     if st then
         undo_restore(st)

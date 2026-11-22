@@ -42,7 +42,10 @@ runner adds the repo to `runtimepath` itself.
 - Loads the plugin from the repo and calls `require("logana").setup({})`.
 - Wraps `require("logana.proc").system` to count how many `rg` processes each refresh starts. The
   tests check this count to confirm which levels re-ran:
-  - level 1 (`[rg]`) runs one `rg`;
+  - level 1 (`[rg]`) runs one `rg` per chunk of the files searched (`chunks.lua`), one
+    per file in these small tests, or one `rg` for a single file (the runner pins the
+    core count, so the counts don't depend on the machine). A directory search's
+    `rg --files` listing before it is counted apart (`list_calls`);
   - level 2 (`[highlight]`) runs one `rg` per `[highlight]` line that has a pattern,
     when rows are drawn, not during the refresh;
   - `0` means nothing re-ran.

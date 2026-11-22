@@ -360,6 +360,7 @@ local function get_runtime_opts(rule_buf)
         return nil, perr
     end
     vim.list_extend(args, rule.rg.cmd)
+    local search_args, opened = vim.list_slice(args), nil
 
     if rule.file and rule.file.opened_only then
         local files = get_valid_opened_files()
@@ -373,6 +374,7 @@ local function get_runtime_opts(rule_buf)
             return nil, {}
         end
         vim.list_extend(args, files)
+        opened = files
     end
 
     -- level 1 needs a rerun when the rg args change, or (for opened files) when
@@ -407,6 +409,9 @@ local function get_runtime_opts(rule_buf)
 
     return {
         args_common = args,
+        -- without the opened files, which are in opened (else nil: a directory search)
+        search_args = search_args,
+        opened = opened,
         match_sig = table.concat(sig, '\n'),
         hl_rules = rule.hl_rules,
         hl_sig = table.concat(hl_sig, '\n'),
@@ -414,6 +419,60 @@ local function get_runtime_opts(rule_buf)
         hl_counts = hl_counts,
         opened_only = rule.file and rule.file.opened_only or false,
     }
+end
+
+-- the positional args of rg args (args[1] is rg): { [index] = 'pattern' | 'path' }.
+-- without a -e/-f the first one is the pattern
+local function positionals(args)
+    local kinds, pattern = {}, not has_explicit_pattern(args)
+    local i, rest = 2, false
+    while i <= #args do
+        local a = args[i]
+        if rest or not a:match('^%-.') then
+            kinds[i] = pattern and 'pattern' or 'path'
+            pattern = false
+        elseif a == '--' then
+            rest = true
+        elseif a:match('^%-%-') then
+            if not a:find('=', 1, true) and VALUE_FLAGS[a] then
+                i = i + 1
+            end
+        else
+            -- a short cluster: a value flag takes the rest, or the next arg
+            for j = 2, #a do
+                if SHORT_VALUE[a:sub(j, j)] then
+                    if j == #a then
+                        i = i + 1
+                    end
+                    break
+                end
+            end
+        end
+        i = i + 1
+    end
+    return kinds
+end
+
+-- rg args without the positional args of a kind ('pattern' or 'path'), and whether
+-- there were any
+local function without(args, kind)
+    local kinds, out, found = positionals(args), {}, false
+    for i, a in ipairs(args) do
+        if kinds[i] == kind then
+            found = true
+        else
+            out[#out + 1] = a
+        end
+    end
+    return out, found
+end
+
+-- the args listing the files rg args would search: --files, without the pattern,
+-- which it would take for a path
+local function files_args(args)
+    local out = without(args, 'pattern')
+    table.insert(out, 2, '--files') -- not after a '--', where it's a path
+    return out
 end
 
 local function find_rg_section_end(buf)
@@ -558,6 +617,8 @@ local function remove_highlight_rule(rule_buf, rule_args)
 end
 
 M.get_runtime_opts = get_runtime_opts
+M.files_args = files_args
+M.without = without
 M.toggle_highlight = toggle_highlight
 M.remove_highlight_rule = remove_highlight_rule
 M.initialize_rule_buffer = initialize_rule_buffer

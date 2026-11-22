@@ -75,6 +75,8 @@ logs/b.log
 - `[file]`: `opened_only = true` searches the files opened in Neovim, `false` lets rg
   search cwd. `-g`/`--glob`/`--iglob` in `[rg]` pick files either way: with
   `opened_only` the opened files are filtered as rg would filter them under cwd.
+  The files are listed in a fixed order: opened ones in buffer order, a directory
+  search's sorted by path.
 - `[highlight]`: one ripgrep args list per line, matched against the result lines.
   Each line gets its own color (`LoganaHighlight1..N`); a line may hold several
   patterns. A line with only flags (no `-e`/`-f`) gets no color: its flags are put in

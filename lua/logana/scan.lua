@@ -221,6 +221,19 @@ local function close_output(src)
     C.close(src.fd)
 end
 
+-- whether there are memfds for rg's output, checked once
+local memfd_ok
+local function has_memfd()
+    if memfd_ok == nil then
+        local src = open_output()
+        memfd_ok = src ~= nil
+        if src then
+            close_output(src)
+        end
+    end
+    return memfd_ok
+end
+
 -- the file read_scanned puts the lines in for ':read', returns its path and fd:
 -- on linux an anonymous memfd, memory backed and gone with neovim, opened once.
 -- else a file in the run dir, a tmpfs on most linux systems: on a disk,
@@ -354,4 +367,5 @@ M.release = release
 M.open_output = open_output
 M.scan_output = scan_output
 M.close_output = close_output
+M.has_memfd = has_memfd
 return M

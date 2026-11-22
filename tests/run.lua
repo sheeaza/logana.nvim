@@ -14,12 +14,23 @@ local L = require("logana")
 L.setup({ highlight = { hl_buf = false } })
 
 local process = require("logana.proc")
+-- level 1 runs one rg per chunk of the files searched, up to 4 chunks per core, one
+-- rg per core at a time: a fixed count, so the rg counts don't depend on the machine
+require("logana.chunks").count = function() return 4 end
+-- without posix_spawn or a memfd (CI's other paths, see tests/README.md) it's one rg,
+-- in the order its threads finish the files
+local CHUNKED = process.enabled and require("logana.scan").has_memfd()
 local orig_system = process.system
-local rg_calls, level1_calls, count_calls = 0, 0, 0
+local rg_calls, level1_calls, count_calls, list_calls = 0, 0, 0, 0
 process.system = function(args, ...)
-    -- hit counts run apart from the levels, counted on their own
+    -- hit counts run apart from the levels, counted on their own, and so is the
+    -- listing of the files a directory search runs before its level 1
     if vim.tbl_contains(args, "--count") then
         count_calls = count_calls + 1
+        return orig_system(args, ...)
+    end
+    if vim.tbl_contains(args, "--files") then
+        list_calls = list_calls + 1
         return orig_system(args, ...)
     end
     rg_calls = rg_calls + 1
@@ -695,7 +706,7 @@ test("result buffer folds by file; folds are saved to [fold] and survive a reren
     close_fold("a.log")
     eq({ ["a.log"] = true }, folded_files(), "fold covers one file")
     set_rule(rule, { "-e 'resource'", "-e 'hardware'" })
-    eq(1, refresh(rule), "level 1 reran")
+    eq(CHUNKED and 2 or 1, refresh(rule), "level 1 reran, one rg per file")
     eq({ "a.log" }, fold_section(rule), "[fold] section")
     eq({ ["a.log"] = true }, folded_files(), "fold restored")
 end)
@@ -777,6 +788,61 @@ test("opened_only = false: nothing changed reruns level 1, [highlight] change on
     set_rule(rule, { "-e 'resource'" }, { "-e 'retry'" }, false)
     eq(0, refresh(rule), "only [highlight] changed")
     eq({ "match:1:resource", "match:2:resource", "hl:2:retry:1" }, highlighted())
+end)
+
+-- the files listed in the result, in its order
+local function result_order()
+    local out = {}
+    for _, line in ipairs(result_lines()) do
+        table.insert(out, line:match("^file: (.*)"))
+    end
+    return out
+end
+
+test("opened files are listed in buffer order, each refresh, an rg per chunk", function()
+    local rule = setup_session()
+    for _, f in ipairs({ "z.log", "m.log", "b.log", "y.log", "c.log" }) do
+        vim.fn.writefile(LOG, f)
+        vim.fn.bufload(vim.fn.bufadd(f))
+    end
+    local order = { "a.log", "z.log", "m.log", "b.log", "y.log", "c.log" }
+    for i = 1, 3 do
+        set_rule(rule, { "-e 'resource'", ("-m %d"):format(10 + i) })
+        eq(CHUNKED and 6 or 1, refresh(rule), "rg runs, a chunk per file (up to 16)")
+        if CHUNKED then
+            eq(order, result_order(), "file order, refresh " .. i)
+        end
+    end
+    eq(6 * 3 + 6, #result_lines(), "each file once: header, 2 rows, blank line")
+end)
+
+test("a directory search lists the files sorted by path, its [rg] paths and pattern kept", function()
+    local rule = setup_session()
+    vim.fn.mkdir("logs/b", "p")
+    for _, f in ipairs({ "logs/c.log", "logs/b/x.log", "logs/a.log", "z.log", "logs/b/w.log" }) do
+        vim.fn.writefile(LOG, f)
+    end
+    list_calls = 0
+    set_rule(rule, { "-e 'resource'" }, {}, false)
+    eq(CHUNKED and 6 or 1, refresh(rule), "rg runs, a chunk per file")
+    eq(CHUNKED and 1 or 0, list_calls, "files listed first")
+    if not CHUNKED then
+        return
+    end
+    eq({ "a.log", "logs/a.log", "logs/b/w.log", "logs/b/x.log", "logs/c.log", "z.log" }, result_order())
+    -- a path in [rg]: only the files under it, each once
+    set_rule(rule, { "-e 'resource' logs/b" }, {}, false)
+    refresh(rule)
+    eq({ "logs/b/w.log", "logs/b/x.log" }, result_order(), "[rg] path")
+    eq(2 * 3 + 2, #result_lines(), "each file once: header, 2 rows, blank line")
+    -- the pattern as the first positional arg, no -e: --files must not take it for a path
+    set_rule(rule, { "resource logs/b" }, {}, false)
+    refresh(rule)
+    eq({ "logs/b/w.log", "logs/b/x.log" }, result_order(), "positional pattern")
+    -- a user --sort: one rg, as given
+    set_rule(rule, { "-e 'resource' --sort path" }, {}, false)
+    eq(1, refresh(rule), "--sort: one rg")
+    eq({ "a.log", "logs/a.log", "logs/b/w.log", "logs/b/x.log", "logs/c.log", "z.log" }, result_order())
 end)
 
 -- the files listed in the result, sorted

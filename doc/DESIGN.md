@@ -36,7 +36,8 @@ Every step runs in one of four places:
   `vim.schedule` the work.
 - **Decoration provider** `[D]`: runs inside a redraw; it only reads the match and
   highlight columns in memory and records rows it lacks. It never starts a process.
-- **rg processes** `[P]`: all matching, on other cores. Level 1 (one run), level 2
+- **rg processes** `[P]`: all matching, on other cores. Level 1 (an `rg -j1` per
+  chunk of the files, or one run), level 2
   (one run per `[highlight]` rule, per batch of drawn rows), hit counts (one run
   per rule).
 
@@ -134,6 +135,16 @@ the GC re-mark millions of objects while a large result streamed in.
      [P] rg exits --> [F] exit: schedule pump --> [M] drained -> done
 ```
 
+- **chunks, for a fixed file order** (`chunks.lua`): one rg writes each file's
+  matches when its thread is done with it, so the files' order changed from run to
+  run, and `--sort path` is single-threaded. The file list (the opened files, or a
+  directory search's `rg --files`, sorted by path) is split into ~2 chunks per core,
+  consecutive files of about equal bytes (opened files) or number (a directory: an
+  `fs_stat` per file costs too much), each searched by its own `rg -j1` into its
+  own memfd, one rg per core at a time. The pump reads the runs in order; one is
+  complete once its rg exited, then the next starts and the pump goes on to the
+  next run's memfd. One rg as before: a single file, a user `-j`/`--threads`/`--sort`,
+  `[rg]` paths with opened files, no `posix_spawn` or memfd, a command line over 1 MB.
 - **memfd on Linux**: a pipe holds 64 KB, and nothing reads it while a batch runs
   on the main loop, so rg stalled. With a memfd rg never blocks; the pump polls it
   and punches out pages already read (`fallocate`). Elsewhere a pipe, its chunks

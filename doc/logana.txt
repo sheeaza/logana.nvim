@@ -99,7 +99,9 @@ RULE FILE                                                        *logana-rule*
 [file]          `opened_only = true` searches the files opened in Neovim,
                 `false` lets rg search cwd. `-g`/`--glob`/`--iglob` in [rg]
                 pick files either way: with `opened_only` the opened files
-                are filtered as rg would filter them under cwd.
+                are filtered as rg would filter them under cwd. The files
+                are listed in a fixed order: opened ones in buffer order, a
+                directory search's sorted by path.
 
                                                        *logana-rule-highlight*
 [highlight]     One ripgrep args list per line, matched against the result
