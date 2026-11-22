@@ -146,8 +146,8 @@ RESULT BUFFER                                                  *logana-result*
 - Moving to another line moves the cursor of the source file's window along,
   if the current tab has one, without leaving the result
   (|logana-config-result_win|, `follow`).
-- The result window's winbar shows the `file:` header of the file its top
-  row is in, so it stays in sight while scrolling that file's rows
+- The result window's winbar shows the `file:` header of the file the
+  cursor's row is in, so it stays in sight while that header is scrolled off
   (|logana-config-result_win|, `sticky_header`).
 - Select text on one line in visual mode and press <Enter>: `-F -e '<text>'`
   is added at the end of [highlight] (in `"` if the text has a `'`), matched
@@ -251,7 +251,7 @@ result_win.follow       Default: `true`
                         Move the source window's cursor with the result's.
 result_win.sticky_header Default: `true`
                         The result window's 'winbar' shows the `file:` header
-                        of the file its top row is in.
+                        of the file the cursor's row is in.
 
                                                         *logana-config-naming*
 naming.rule             Default: `'logana_rule'`

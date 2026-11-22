@@ -221,7 +221,18 @@ local function winbar(win)
     return api.nvim_eval_statusline(vim.wo[win].winbar, { winid = win, use_winbar = true }).str
 end
 
-test("sticky header: the result window's winbar shows the top row's file", function()
+-- the winbar of win as on the screen
+local function screen_winbar(win)
+    vim.cmd("redraw")
+    local pos = vim.fn.win_screenpos(win)
+    local out = {}
+    for c = pos[2], pos[2] + api.nvim_win_get_width(win) - 1 do
+        out[#out + 1] = vim.fn.screenstring(pos[1], c)
+    end
+    return vim.trim(table.concat(out))
+end
+
+test("sticky header: the result window's winbar shows the cursor row's file", function()
     local rule = setup_session()
     local big = {}
     for i = 1, 100 do
@@ -233,26 +244,35 @@ test("sticky header: the result window's winbar shows the top row's file", funct
     set_rule(rule, { "-e 'resource'" }, {}, false)
     refresh(rule)
     local win = vim.fn.bufwinid(result_buf())
-    local function top(row)
+    -- the cursor on row, top the window's top row
+    local function at(row, top)
         api.nvim_win_call(win, function()
-            api.nvim_win_set_cursor(0, { row, 0 })
-            vim.cmd("normal! zt")
+            vim.fn.winrestview({ topline = top, lnum = row, col = 0 })
         end)
-        eq(row, vim.fn.line("w0", win), "top row")
+        eq({ row, top }, { vim.fn.line(".", win), vim.fn.line("w0", win) }, "cursor, top row")
         return winbar(win)
     end
-    eq("file: a.log", top(1), "on the header")
-    eq("file: a.log", top(50), "a.log rows, header scrolled off")
     -- rows: 1 header, 2-101 a.log, 102 blank, 103 header, then b%.log ('%' escaped)
-    eq("file: a.log", top(102), "the blank row after a file")
-    eq("file: b%.log", top(103), "next header")
-    eq("file: b%.log", top(150), "b%.log rows")
+    eq("file: a.log", at(1, 1), "on the header")
+    eq("file: a.log", at(50, 45), "a.log rows, header scrolled off")
+    eq("file: a.log", at(102, 95), "the blank row after a file")
+    eq("file: b%.log", at(103, 95), "next header")
+    eq("file: b%.log", at(105, 95), "b%.log row, the top row in a.log")
+    eq("file: a.log", at(100, 95), "a.log row, b%.log's header on screen too")
 
-    -- an edited result: searched back from the top row
+    -- moving the cursor into another file without scrolling: nvim redraws the winbar
+    api.nvim_set_current_win(win)
+    at(100, 95)
+    eq("file: a.log", screen_winbar(win), "drawn, a.log")
+    api.nvim_win_set_cursor(win, { 105, 0 })
+    eq(95, vim.fn.line("w0", win), "not scrolled")
+    eq("file: b%.log", screen_winbar(win), "drawn after the move")
+
+    -- an edited result: its headers found again
     vim.bo[result_buf()].modifiable = true
     api.nvim_buf_set_lines(result_buf(), 0, 1, false, { "file: edited.log" })
-    eq("file: edited.log", top(50), "edited result")
-    eq("file: b%.log", top(150), "edited result, second file")
+    eq("file: edited.log", at(50, 45), "edited result")
+    eq("file: b%.log", at(150, 140), "edited result, second file")
 
     -- a source opened in the result window drops it, the result coming back gets it
     api.nvim_win_close(vim.fn.bufwinid("a.log"), true)

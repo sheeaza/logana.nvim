@@ -223,6 +223,8 @@ From a review of the modules after the split.
   Set / cleared on `BufWinEnter` (`update_winbar`), e.g. cleared when `<Enter>` opens
   the source in the result window. An edited result has its headers found again
   with `matchbufline` once per change: 15 ms for 740k lines.
+  Then changed from the top row's file to the cursor row's file: nvim redraws the
+  current window's winbar on cursor moves, so no autocmd is needed for that either.
 
 
 ## Highlight

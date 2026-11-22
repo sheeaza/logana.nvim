@@ -121,15 +121,16 @@ local function header_of_row(buf, row)
     return rows[hi] and rows[hi][2]
 end
 
--- the winbar of a result window: the 'file: ' header of its top row's file, so
--- the file of the rows on screen shows while its header is scrolled off. an
--- expression, evaluated on each redraw of the window
+-- the winbar of a result window: the 'file: ' header of the file the cursor's
+-- row is in, so it shows while that header is scrolled off. an expression,
+-- evaluated on each redraw of the winbar, which nvim also does when the cursor
+-- of the current window moves
 local WINBAR = "%{%v:lua.require'logana.result'.winbar()%}"
 
 -- (%{} items: the window drawn is the current one meanwhile). an error here
 -- would come on every redraw, none gets out
 function M.winbar()
-    local ok, file = pcall(header_of_row, api.nvim_get_current_buf(), fn.line('w0'))
+    local ok, file = pcall(header_of_row, api.nvim_get_current_buf(), fn.line('.'))
     return ok and file and ("file: " .. file):gsub('%%', '%%%%') or ''
 end
 
