@@ -21,7 +21,8 @@ local M = {}
 --   its source files), bound (when last refreshed or its tab entered, see
 --   bind_tab; the source files take the rules of the last one), result_buf, result_dirty, attached_buf, file_rows,
 --   job (level 1 run in progress), gen, writing,
---   texts (the result lines' texts, scan.open_texts), counts (count.lua) }
+--   texts (the result lines' texts, scan.open_texts), counts (count.lua),
+--   undo ({ buf, levels }: the result's 'undolevels' while level 1 rewrites it) }
 local RULE_STATE = {}
 local refreshes = 0
 
@@ -58,6 +59,28 @@ local function attach_result(st, result_buf)
             end
         end,
     })
+end
+
+-- level 1 rewrites the result with 'undolevels' -1: with undo on, clearing the old
+-- result first copied all its lines into the undo tree, which made repeated
+-- refreshes take seconds. it's set back when the run ends, so edits made in the
+-- result after it can be undone; the next refresh drops their history
+local function undo_restore(st)
+    local u = st.undo
+    st.undo = nil
+    if u and api.nvim_buf_is_valid(u.buf) then
+        api.nvim_set_option_value('undolevels', u.levels, { buf = u.buf })
+    end
+end
+
+local function undo_off(st, result_buf)
+    if st.undo and st.undo.buf ~= result_buf then
+        undo_restore(st)
+    end
+    if not st.undo then
+        st.undo = { buf = result_buf, levels = api.nvim_get_option_value('undolevels', { buf = result_buf }) }
+    end
+    api.nvim_set_option_value('undolevels', -1, { buf = result_buf })
 end
 
 -- new [highlight] rules and folds, once level 1 is done (or didn't need to run)
@@ -144,6 +167,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
             vim.notify(("[logana] ripgrep error for: %s"):format(res.stderr or "exit code 2"), vim.log.levels.WARN)
         end
         if not job.started then
+            undo_restore(st)
             count.stop_all(rule_buf, st)
             if res.code == 1 then
                 vim.notify(("[logana] cmd[%s], no match found"):format(table.concat(ropts.args_common, ' ')),
@@ -161,6 +185,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
             api.nvim_buf_set_lines(result_buf, -1, -1, false, { '' })
             st.writing = false
         end
+        undo_restore(st)
         log.trace(string.format("first lines took: %d ms", job.first_ms))
         log.trace(string.format("parse rg output took: %d ms", job.parse_ms))
         log.trace(string.format("set lines took: %d ms", job.set_ms))
@@ -178,10 +203,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         if not job.started then
             job.started = true
             job.first_ms = now_ms() - job.t0
-            -- result buffers are fully regenerated on every refresh; there's nothing
-            -- worth undoing to, and snapshotting hundreds of thousands of prior lines
-            -- into the undo tree before each replace made repeated refreshes take seconds.
-            pcall(api.nvim_set_option_value, "undolevels", -1, { buf = result_buf })
+            undo_off(st, result_buf)
             -- disable swapfile here too, since result buffers reloaded from disk via
             -- fn.bufadd/fn.bufload bypass create_normal_buffer's swapfile=false
             pcall(api.nvim_set_option_value, "swapfile", false, { buf = result_buf })
@@ -322,6 +344,7 @@ local function run_level1(rule_buf, st, ropts, fold_edited, t_all, on_done)
         end
         st.job = nil
         job.stop_spinner()
+        undo_restore(st)
         vim.notify("[logana] failed to execute ripgrep", vim.log.levels.WARN)
         return
     end
@@ -424,6 +447,7 @@ local function forget(buf)
         pcall(st.job.proc.kill, st.job.proc, 15)
     end
     if st then
+        undo_restore(st)
         count.stop_all(buf, st)
         if st.texts then
             scan.close_texts(st.texts)

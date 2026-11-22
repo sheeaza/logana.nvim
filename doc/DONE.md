@@ -376,3 +376,10 @@ From a review of the modules after the split.
   (423), `total` 360 (369). Not worth reopening: `collect_highlights` is gone, level 2
   is lazy (per screen) since, and the counts are rg runs whose time doesn't show the
   number of matches.
+- [x] Undo in the result buffer between refreshes. `undolevels` was -1 for good: with
+  undo on, the first write's `:%delete _` copies every old result line into the undo
+  tree (`u_savecommon`), the cost, not the history already there. Now it's -1 only
+  while level 1 rewrites the result and set back when the run ends (also with no
+  match, an rg error, rg failing to start, or the rule buffer wiped), so edits can be
+  undone until the next refresh, which drops their history. Synthetic log, median of
+  5, gate passed: `large` level1 389 -> 369 ms, total 391 -> 371, rss_MB 193 -> 193.
