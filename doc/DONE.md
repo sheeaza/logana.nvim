@@ -212,6 +212,18 @@ From a review of the modules after the split.
   used when no run is loading and the result isn't edited, else `search()`.
   `test-500m.log`, a 1.1M row result of one file, one follow at rows 2 / 550k / 1.1M:
   0.04 / 0.02 / 0.02 ms, with `search()` 0.03 / 22 / 44 ms.
+- [x] Sticky `file:` header in the result buffer: the header of the file the top row
+  of the window belongs to stays on top while scrolling, e.g. in the window's winbar
+  (or a floating window over the first line), updated on scroll (`WinScrolled`,
+  `CursorMoved`), found with the `file_rows` binary search `header_file` already does.
+  Hidden when the top row is the header itself.
+  Done: the winbar (picked over a float, which would cover the top row), an
+  expression (`result.winbar`) evaluated on each redraw, so no scroll autocmds.
+  Always shown in a result window, also on a header row, so the layout doesn't jump.
+  Set / cleared on `BufWinEnter` (`update_winbar`), e.g. cleared when `<Enter>` opens
+  the source in the result window. An edited result has its headers found again
+  with `matchbufline` once per change: 15 ms for 740k lines.
+
 
 ## Highlight
 

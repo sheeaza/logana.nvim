@@ -213,6 +213,67 @@ test("<Enter> on a result row: the source not shown in this tab opens in the res
     eq({ 3, 9 }, api.nvim_win_get_cursor(res_win), "cursor")
 end)
 
+-- the result window's winbar as drawn, or nil when it has none
+local function winbar(win)
+    if vim.wo[win].winbar == "" then
+        return nil
+    end
+    return api.nvim_eval_statusline(vim.wo[win].winbar, { winid = win, use_winbar = true }).str
+end
+
+test("sticky header: the result window's winbar shows the top row's file", function()
+    local rule = setup_session()
+    local big = {}
+    for i = 1, 100 do
+        big[i] = "resource " .. i
+    end
+    vim.fn.writefile(big, "a.log")
+    vim.fn.writefile(big, "b%.log")
+    vim.cmd("checktime")
+    set_rule(rule, { "-e 'resource'" }, {}, false)
+    refresh(rule)
+    local win = vim.fn.bufwinid(result_buf())
+    local function top(row)
+        api.nvim_win_call(win, function()
+            api.nvim_win_set_cursor(0, { row, 0 })
+            vim.cmd("normal! zt")
+        end)
+        eq(row, vim.fn.line("w0", win), "top row")
+        return winbar(win)
+    end
+    eq("file: a.log", top(1), "on the header")
+    eq("file: a.log", top(50), "a.log rows, header scrolled off")
+    -- rows: 1 header, 2-101 a.log, 102 blank, 103 header, then b%.log ('%' escaped)
+    eq("file: a.log", top(102), "the blank row after a file")
+    eq("file: b%.log", top(103), "next header")
+    eq("file: b%.log", top(150), "b%.log rows")
+
+    -- an edited result: searched back from the top row
+    vim.bo[result_buf()].modifiable = true
+    api.nvim_buf_set_lines(result_buf(), 0, 1, false, { "file: edited.log" })
+    eq("file: edited.log", top(50), "edited result")
+    eq("file: b%.log", top(150), "edited result, second file")
+
+    -- a source opened in the result window drops it, the result coming back gets it
+    api.nvim_win_close(vim.fn.bufwinid("a.log"), true)
+    result_jump(150, 0)
+    eq(nil, winbar(win), "source in the window")
+    vim.cmd("buffer " .. result_buf())
+    eq("file: b%.log", winbar(win), "result back in the window")
+end)
+
+test("sticky header: result_win.sticky_header = false puts no winbar", function()
+    L.config.result_win.sticky_header = false
+    local ok, err = pcall(function()
+        local rule = setup_session()
+        set_rule(rule, { "-e 'resource'" })
+        refresh(rule)
+        eq(nil, winbar(vim.fn.bufwinid(result_buf())))
+    end)
+    L.config.result_win.sticky_header = true
+    assert(ok, err)
+end)
+
 test("<Enter> on a result row: a source with no buffer yet opens listed, as :edit", function()
     local rule = setup_session()
     set_rule(rule, { "-e 'Timeout'" }, {}, false)

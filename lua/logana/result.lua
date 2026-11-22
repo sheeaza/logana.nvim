@@ -79,31 +79,69 @@ local function show_result(rule_buf, result_buf)
     end
 end
 
--- the path in the 'file: ' header above 1-based row of the current (result)
--- buffer. from the header rows level 1 recorded, when they match the buffer: a
--- search back from a row of a big one-file result goes over every row above it
-local function header_file(row)
-    -- required here, refresh requires this module
-    local _, st = require('logana.refresh').rule_state_of_result(api.nvim_get_current_buf())
-    local rows = st and not st.job and not st.result_dirty and st.file_rows
-    if rows then
-        -- the last header at or above row
-        local lo, hi = 1, #rows
-        while lo <= hi do
-            local mid = math.floor((lo + hi) / 2)
-            if rows[mid][1] <= row then
-                lo = mid + 1
-            else
-                hi = mid - 1
-            end
+-- the header rows of an edited result, { { <1-based row>, <path> }, ... } as
+-- level 1's file_rows, found again only when the buffer changed
+local EDITED_ROWS = setmetatable({}, { __mode = 'k' })
+
+local function edited_rows(buf)
+    local tick = api.nvim_buf_get_changedtick(buf)
+    local c = EDITED_ROWS[buf]
+    if not c or c.tick ~= tick then
+        local rows = {}
+        for _, m in ipairs(fn.matchbufline(buf, [[^file: \zs.\+$]], 1, '$')) do
+            rows[#rows + 1] = { m.lnum, m.text }
         end
-        return rows[hi] and rows[hi][2]
+        c = { tick = tick, rows = rows }
+        EDITED_ROWS[buf] = c
     end
-    local fline_num = fn.search('^file: ', 'bnW')
-    if fline_num == 0 then
-        return nil
+    return c.rows
+end
+
+-- the path in the 'file: ' header at or above 1-based row of result buffer buf.
+-- from the header rows level 1 recorded (so far, while it loads), when they match
+-- the buffer (not edited): a search back from a row of a big one-file result goes
+-- over every row above it
+local function header_of_row(buf, row)
+    -- required here, refresh requires this module
+    local _, st = require('logana.refresh').rule_state_of_result(buf)
+    -- a level 1 run replaces the buffer at its first batch (job.started)
+    local rows = st and not st.result_dirty
+        and (st.job and st.job.started and st.job.parser.file_rows or st.file_rows)
+    rows = rows or edited_rows(buf)
+    -- the last header at or above row
+    local lo, hi = 1, #rows
+    while lo <= hi do
+        local mid = math.floor((lo + hi) / 2)
+        if rows[mid][1] <= row then
+            lo = mid + 1
+        else
+            hi = mid - 1
+        end
     end
-    return fn.getline(fline_num):match("^file: (.+)$")
+    return rows[hi] and rows[hi][2]
+end
+
+-- the winbar of a result window: the 'file: ' header of its top row's file, so
+-- the file of the rows on screen shows while its header is scrolled off. an
+-- expression, evaluated on each redraw of the window
+local WINBAR = "%{%v:lua.require'logana.result'.winbar()%}"
+
+-- (%{} items: the window drawn is the current one meanwhile). an error here
+-- would come on every redraw, none gets out
+function M.winbar()
+    local ok, file = pcall(header_of_row, api.nvim_get_current_buf(), fn.line('w0'))
+    return ok and file and ("file: " .. file):gsub('%%', '%%%%') or ''
+end
+
+-- BufWinEnter: the window shows a result buffer, it gets the winbar; it shows
+-- another buffer (e.g. a source opened by <Enter>), the one put by logana goes
+-- back to the global value
+local function update_winbar(buf, win)
+    if vim.bo[buf].filetype == config.naming.result and config.result_win.sticky_header then
+        vim.wo[win].winbar = WINBAR
+    elseif vim.wo[win].winbar == WINBAR then
+        vim.wo[win].winbar = vim.go.winbar
+    end
 end
 
 -- the source of the cursor's row in the current (result) buffer: file, line and
@@ -116,7 +154,7 @@ local function row_source()
     end
     local cursor = api.nvim_win_get_cursor(0)
     local col = math.max(0, cursor[2] - #lnum_str - 2) -- -2 for ':' and ' '
-    local file = header_file(cursor[1])
+    local file = header_of_row(api.nvim_get_current_buf(), cursor[1])
     if not file or file == '' then
         return nil, "did not find 'file:'"
     end
@@ -195,6 +233,7 @@ end
 M.get_result_buf = get_result_buf
 M.show_result = show_result
 M.result_buffer_jump = result_buffer_jump
+M.update_winbar = update_winbar
 M.follow_enter = follow_enter
 M.follow = follow
 return M

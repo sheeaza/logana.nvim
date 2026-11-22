@@ -109,6 +109,8 @@ colors them a moment later.
   file's window if the current tab has one, otherwise in the result window.
 - Moving to another line moves the cursor of the source file's window along, if the
   current tab has one, without leaving the result (`result_win.follow`).
+- The result window's winbar shows the `file:` header of the file its top row is in,
+  so it stays in sight while scrolling that file's rows (`result_win.sticky_header`).
 - Select text on one line in visual mode and press `<Enter>`: `-F -e '<text>'` is added
   at the end of `[highlight]` (in `"` if the text has a `'`), matched as is, not as a
   regex. Doing it again on the same text removes that line; only lines that are
@@ -175,6 +177,7 @@ next refresh. `hit_count = false` turns them off.
 | `layout.rule_window` | `'20'` | rule window size, percent of the rule/result split |
 | `result_win.behavior` | `'split'` | `'split'` the rule window, or `'override'`: show the result in it |
 | `result_win.follow` | `true` | move the source window's cursor with the result's |
+| `result_win.sticky_header` | `true` | the top row's `file:` header in the result window's winbar |
 | `naming.rule` / `naming.result` | `'logana_rule'` / `'logana_result'` | file extensions, also the filetypes |
 | `rule_template` | see `defconfig.lua` | text of a new rule buffer |
 | `key.rule_refresh` | `'<cr>'` | refresh, in the rule buffer |

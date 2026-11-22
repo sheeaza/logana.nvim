@@ -173,6 +173,14 @@ local function setup_keybinding()
         desc = "logana: free the state of a wiped rule/result buffer",
     })
 
+    api.nvim_create_autocmd("BufWinEnter", {
+        group = M._quit_auto,
+        callback = function(ev)
+            result.update_winbar(ev.buf, api.nvim_get_current_win())
+        end,
+        desc = "logana: result windows show the top row's file: header in the winbar",
+    })
+
     api.nvim_create_autocmd("TabEnter", {
         group = M._quit_auto,
         callback = function()

@@ -2,14 +2,6 @@
 
 Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 
-## Features
-
-- [ ] Sticky `file:` header in the result buffer: the header of the file the top row
-  of the window belongs to stays on top while scrolling, e.g. in the window's winbar
-  (or a floating window over the first line), updated on scroll (`WinScrolled`,
-  `CursorMoved`), found with the `file_rows` binary search `header_file` already does.
-  Hidden when the top row is the header itself.
-
 ## Low priority, not planned
 
 Hopping match to match (`]h`, `]q`) isn't the intended workflow: the result buffer is

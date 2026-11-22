@@ -64,6 +64,10 @@ local M = {
         -- 'override': show it in the rule window, 'layout' will be ignored
         behavior = 'split',
 
+        -- the window's winbar shows the 'file: ' header of the file its top row is
+        -- in, so it stays in sight while scrolling the file's rows. false to turn off
+        sticky_header = true,
+
         -- moving to another line in the result window also moves the cursor of the
         -- source file's window, if the current tab has one (the first one). false to
         -- turn off; <Enter> still goes to that window
