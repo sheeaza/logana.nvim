@@ -252,7 +252,9 @@ test("sticky header: the result window's winbar shows the cursor row's file", fu
     vim.fn.writefile(big, "a.log")
     vim.fn.writefile(big, "b%.log")
     vim.cmd("checktime")
-    set_rule(rule, { "-e 'resource'" }, {}, false)
+    -- --sort path: a.log first also without chunked runs (macos: one rg, files in
+    -- the order its threads finish them)
+    set_rule(rule, { "-e 'resource'", "--sort path" }, {}, false)
     refresh(rule)
     local win = vim.fn.bufwinid(result_buf())
     -- the cursor on row, top the window's top row
