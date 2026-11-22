@@ -67,8 +67,7 @@ end
 -- the rule args of the [highlight] color shown where the selection is, the one
 -- drawn on top if several (the last). nil if none, or the row's colors aren't in
 -- yet: then none is shown either
-local function rule_under_selection(result_buf, pos)
-    local hls = highlight.by_buf[result_buf]
+local function rule_under_selection(hls, pos)
     local s, e = pos[1][1], pos[1][2]
     local marks = hls and hls.hl[s[2] - 1]
     if not marks then
@@ -84,11 +83,12 @@ local function rule_under_selection(result_buf, pos)
     end
 end
 
--- visual <Enter> in a result buffer: inside a [highlight] color, its line is
--- removed; else the selected text goes in or out of [highlight]. the colors follow,
--- only level 2 reruns, not a full refresh
-local function toggle_selection_highlight()
-    local result_buf = api.nvim_get_current_buf()
+-- visual <Enter> in a result or source buffer: inside a [highlight] color, its
+-- line is removed; else the selected text goes in or out of [highlight]. the
+-- colors follow, only level 2 reruns, not a full refresh. find() gives the rule
+-- buffer and the colors shown in the buffer (nil if none)
+local function toggle_selection(find)
+    local buf = api.nvim_get_current_buf()
     local opts = { type = fn.mode() }
     local region = fn.getregion(fn.getpos('v'), fn.getpos('.'), opts)
     local pos = fn.getregionpos(fn.getpos('v'), fn.getpos('.'), opts)
@@ -100,14 +100,14 @@ local function toggle_selection_highlight()
     if region[1] == '' then
         return
     end
-    local rule_buf = rule_buf_of_result(result_buf)
+    local rule_buf, hls = find(buf)
     if not rule_buf then
-        vim.notify("[logana] no rule buffer found for this result", vim.log.levels.INFO)
+        vim.notify("[logana] no rule buffer found for this buffer", vim.log.levels.INFO)
         return
     end
     -- matched by args, not the color's line number: the rule buffer may have changed
     -- since the colors were computed. no longer there: toggle the text instead
-    local args = rule_under_selection(result_buf, pos)
+    local args = rule_under_selection(hls, pos)
     if args and rule.remove_highlight_rule(rule_buf, args) then
         return refresh.refresh_highlight(rule_buf)
     end
@@ -118,9 +118,37 @@ local function toggle_selection_highlight()
     end)
 end
 
+local function toggle_result_selection()
+    toggle_selection(function(buf)
+        return rule_buf_of_result(buf), highlight.by_buf[buf]
+    end)
+end
+
+-- in a source: its rule buffer and colors as its windows show them. no longer
+-- a source: the key does what it does without the mapping
+local function toggle_source_selection()
+    local buf = api.nvim_get_current_buf()
+    local rule_buf, from = highlight.source_of(buf)
+    if not rule_buf then
+        local key = api.nvim_replace_termcodes(config.key.toggle_highlight, true, false, true)
+        return api.nvim_feedkeys(key, 'n', false)
+    end
+    toggle_selection(function()
+        local hls = highlight.source_by_buf[buf]
+        return rule_buf, hls and hls.from == from and hls.hl_rules == from.hl_rules and hls or nil
+    end)
+end
+
 local function setup_keybinding()
     if M._quit_auto then
         return
+    end
+
+    -- a buffer seen as a source of a rule buffer's result gets the visual toggle,
+    -- buffer-local: the user's other buffers keep their own <Enter>
+    highlight.on_source = function(buf)
+        vim.keymap.set("x", config.key.toggle_highlight, toggle_source_selection,
+            { buffer = buf, noremap = true, silent = true, desc = "logana: toggle highlight of selection" })
     end
 
     -- Suppress save prompts on quit for rule/result buffers by marking them nomodified
@@ -177,7 +205,7 @@ local function setup_keybinding()
         callback = function(ev)
             vim.keymap.set("n", config.key.result_jump, result.result_buffer_jump,
                 { buffer = ev.buf, noremap = true, silent = true, desc = "logana: results jump" })
-            vim.keymap.set("x", config.key.result_toggle_highlight, toggle_selection_highlight,
+            vim.keymap.set("x", config.key.toggle_highlight, toggle_result_selection,
                 { buffer = ev.buf, noremap = true, silent = true, desc = "logana: toggle highlight of selection" })
 
             local group = api.nvim_create_augroup("logana_result_" .. ev.buf, { clear = true })

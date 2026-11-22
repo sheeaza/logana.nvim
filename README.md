@@ -139,6 +139,11 @@ tabs and with the result closed, until the rule buffer is wiped or a refresh no 
 lists the file. If several rule buffers list it, the one refreshed last gives the
 rules. `highlight.hl_buf = false` turns it off.
 
+Visual `<Enter>` in such a file toggles the selection in `[highlight]` as in the
+result buffer, in that rule buffer (`key.toggle_highlight`). The mapping is
+local to the file's buffer, set once it's shown as a source; if it no longer is one,
+`<Enter>` does what it does without it.
+
 ### Hit counts
 
 After a refresh, the end of each `[rg]` line with a `-e`/`-f` and each colored
@@ -171,7 +176,7 @@ next refresh. `hit_count = false` turns them off.
 | `rule_template` | see `defconfig.lua` | text of a new rule buffer |
 | `key.rule_refresh` | `'<cr>'` | refresh, in the rule buffer |
 | `key.result_jump` | `'<cr>'` | jump to the source line, in the result buffer |
-| `key.result_toggle_highlight` | `'<cr>'` | visual mode in the result buffer: toggle the selection in `[highlight]` |
+| `key.toggle_highlight` | `'<cr>'` | visual mode in the result buffer, or a source file of it: toggle the selection in `[highlight]` |
 
 Colors, fixed by default so they look the same with every colorscheme; use `link` to
 follow the theme:

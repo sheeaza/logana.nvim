@@ -1281,6 +1281,58 @@ test("source window: none for a file that isn't a source", function()
     end)
 end)
 
+-- in the window of file: select `keys` from (row, col) (1-based row, 0-based col),
+-- press <Enter>, and wait for the rule buffer to change
+local function toggle_in_source(rule, file, row, col, keys)
+    local tick = api.nvim_buf_get_changedtick(rule)
+    api.nvim_set_current_win(vim.fn.bufwinid(file))
+    api.nvim_win_set_cursor(0, { row, col })
+    api.nvim_feedkeys(api.nvim_replace_termcodes(keys .. "<CR>", true, false, true), "mx", false)
+    vim.wait(5000, function() return api.nvim_buf_get_changedtick(rule) ~= tick end, 1)
+end
+
+-- the buffer-local visual <Enter> of a buffer, the source toggle's
+local function has_source_toggle(file)
+    local m = api.nvim_buf_call(vim.fn.bufnr(file), function() return vim.fn.maparg("<CR>", "x", false, true) end)
+    return m.buffer == 1
+end
+
+test("source window: visual <Enter> toggles [highlight] like in the result", function()
+    with_source(function()
+        local rule = setup_session()
+        set_rule(rule, { "-e 'resource'" }, { "-e 'busy'" })
+        refresh(rule)
+        eq({ "hl:0:busy:1" }, source_highlighted("a.log"))
+        vim.wait(5000, function() return has_source_toggle("a.log") end, 1)
+        toggle_in_source(rule, "a.log", 1, 20, "vl")   -- "us" of "busy"
+        eq({}, hl_section(rule))
+        eq(nil, source_highlighted("a.log"), "no rules, no colors")
+        -- still a source with no rules: the text goes in
+        toggle_in_source(rule, "a.log", 1, 4, "v4l")   -- "ERROR"
+        eq({ "-F -e 'ERROR'" }, hl_section(rule))
+        eq({ "hl:0:ERROR:1" }, source_highlighted("a.log"))
+        eq({ "match:1:resource", "hl:1:ERROR:1", "match:2:resource" }, highlighted())
+    end)
+end)
+
+test("source window: visual <Enter> only mapped in sources, the usual one once it isn't", function()
+    with_source(function()
+        local rule = setup_session()
+        vim.fn.writefile(LOG, "b.log")
+        vim.cmd("split b.log")
+        set_rule(rule, { "-e 'resource'", "a.log" }, { "-e 'busy'" }, false)
+        refresh(rule)
+        source_highlighted("a.log")
+        vim.wait(5000, function() return has_source_toggle("a.log") end, 1)
+        eq(false, has_source_toggle("b.log"), "b.log isn't a source")
+        vim.cmd("bwipeout! " .. rule)
+        api.nvim_set_current_win(vim.fn.bufwinid("a.log"))
+        api.nvim_win_set_cursor(0, { 1, 0 })
+        api.nvim_feedkeys(api.nvim_replace_termcodes("v<CR><Esc>", true, false, true), "mx", false)
+        eq({ 2, 0 }, api.nvim_win_get_cursor(0), "<CR> moved down")
+    end)
+end)
+
 test("source window: bound to the rule buffer, kept in another tab and without the result", function()
     with_source(function()
         local rule = setup_session()

@@ -36,6 +36,8 @@ local WIN_SOURCE = {}
 -- file_rows table -> { n = <rows looked at>, set = { [full path] = true } }
 local SOURCE_PATHS = setmetatable({}, { __mode = 'k' })
 local decoration_provider_ready = false
+-- buffers source_of found a rule buffer for once, M.on_source was called with
+local SOURCE_SEEN = {}
 
 -- level 2 draws above level 1, so a [highlight] color wins where both overlap
 local PRIORITY_MATCH = 4096
@@ -103,7 +105,9 @@ end
 -- keeps its colors in any tab, also with the result closed or wiped, until the rule
 -- buffer is. of several, the last refreshed rule buffer gives the rules. started
 -- over when those rules change, or the buffer does (edits, :e)
-local function source_highlights(bufnr)
+-- the rule buffer and its state a buffer is a source of, as source_highlights
+-- picks it, also with no [highlight] rules. nil: none, or hl_buf is off
+local function source_of(bufnr)
     if not config.highlight.hl_buf or api.nvim_get_option_value('buftype', { buf = bufnr }) ~= '' then
         return nil
     end
@@ -111,15 +115,28 @@ local function source_highlights(bufnr)
     if path == '' then
         return nil
     end
-    local from
+    local from, from_buf
     for rule_buf, st in pairs(require('logana.refresh').state) do -- it requires this module
         -- while level 1 loads, the headers it found so far
         local rows = st.job and st.job.parser.file_rows or st.file_rows
         if rows and st.hl_rules and (not from or st.bound > from.bound)
             and api.nvim_buf_is_valid(rule_buf) and has_source(rows, path) then
-            from = st
+            from, from_buf = st, rule_buf
         end
     end
+    if from and not SOURCE_SEEN[bufnr] and M.on_source then
+        SOURCE_SEEN[bufnr] = true
+        vim.schedule(function() -- not in the redraw
+            if api.nvim_buf_is_valid(bufnr) then
+                M.on_source(bufnr)
+            end
+        end)
+    end
+    return from_buf, from
+end
+
+local function source_highlights(bufnr)
+    local _, from = source_of(bufnr)
     if not from or #from.hl_rules == 0 then
         SOURCE_HIGHLIGHTS[bufnr] = nil -- e.g. its rule buffer was wiped
         return nil
@@ -348,6 +365,7 @@ end
 M.by_buf = RESULT_HIGHLIGHTS
 M.source_by_buf = SOURCE_HIGHLIGHTS
 M.redraw_sources = redraw_sources
+M.source_of = source_of
 M.ensure_decoration_provider = ensure_decoration_provider
 M.reset_highlights = reset_highlights
 M.match_ranges = match_ranges
