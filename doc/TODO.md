@@ -2,6 +2,25 @@
 
 Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 
+## Result file order
+
+rg searches files in parallel and writes each file's block of matches when its thread
+is done, so the order of the blocks in the result can change between two refreshes
+over the same files (lines inside a file are always in order). `--sort path` fixes it,
+but makes rg single-threaded. Measure each item with `tests/bench.lua`, on one file and
+on a split log (`split -l 882 -a 5 -d <log> <dir>/f`, ~10k files), also with the
+largest file listed first.
+
+- [ ] `opened_only`: the file list is known (`get_valid_opened_files`, buffer order).
+  Write a file's block only once all files before it in the list are written. Blocks
+  that come early wait in memory. No extra CPU: watch `first` (grows when an early
+  file is slow, worst case its whole search time), `max_batch` (the held blocks must
+  still be written in batches, not in one burst) and `rss_MB`.
+- [ ] Directory search (`opened_only = false`): list the files first with `rg --files`
+  (same globs and ignore rules), sorted by path, pass them as explicit paths and order
+  the blocks as above. Cost: the extra walk, added to `first`. Fall back to rg's own
+  order when the list is too long for one command line (`ARG_MAX`).
+
 ## Low priority, not planned
 
 Hopping match to match (`]h`, `]q`) isn't the intended workflow: the result buffer is
