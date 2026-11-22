@@ -138,7 +138,9 @@ A file listed in a result (a `file:` header) gets the `[highlight]` colors in it
 windows too, not the `[rg]` one, only for the lines on screen. It keeps them in other
 tabs and with the result closed, until the rule buffer is wiped or a refresh no longer
 lists the file. If several rule buffers list it, the one refreshed last gives the
-rules. `highlight.hl_buf = false` turns it off.
+rules. Entering a tab that shows a rule or result buffer (the first one in window
+order, a result standing for its rule buffer) makes that one give the rules, so each
+tab can hold its own rule, result and sources. `highlight.hl_buf = false` turns it off.
 
 Visual `<Enter>` in such a file toggles the selection in `[highlight]` as in the
 result buffer, in that rule buffer (`key.toggle_highlight`). The mapping is

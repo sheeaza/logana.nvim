@@ -281,6 +281,17 @@ From a review of the modules after the split.
   `refresh_from_rule`. The toggle tests check the colors stay until a refresh. README:
   Toggling a highlight says to press `<Enter>` in the rule buffer, Refresh says the
   result buffer is volatile.
+- [x] One workflow per tab: each tab has its own rule and/or result buffer, with its
+  source files opened. Entering a tab (`TabEnter`) that shows a rule or result buffer
+  rebinds the source files in it to that rule, and redraws their `[highlight]` colors.
+  Several rule/result buffers in the tab: the first one (window order) wins. Today a
+  source is bound to the last refreshed rule buffer whose result lists it, in every
+  tab, so switching tabs keeps the other tab's colors until a refresh.
+  - nothing to do in a tab with no rule/result buffer, or no source opened
+  - a result buffer stands for the rule buffer it belongs to
+  Done: `refresh.bind_tab` on `TabEnter` gives the first rule (or result's rule)
+  buffer of the tab's windows the newest `bound`, as a refresh would, and redraws the
+  source windows; nothing when it already has it.
 
 ## Time
 

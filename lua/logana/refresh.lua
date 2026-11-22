@@ -18,8 +18,8 @@ local M = {}
 
 -- per rule buffer refresh state, used to skip levels that don't need updating:
 -- { match_sig, hl_sig, hl_rules, hl_warned (the result's level 2 rules, also for
---   its source files), bound (when last refreshed, the source files take the rules
---   of the last one), result_buf, result_dirty, attached_buf, file_rows,
+--   its source files), bound (when last refreshed or its tab entered, see
+--   bind_tab; the source files take the rules of the last one), result_buf, result_dirty, attached_buf, file_rows,
 --   job (level 1 run in progress), gen, writing,
 --   texts (the result lines' texts, scan.open_texts), counts (count.lua) }
 local RULE_STATE = {}
@@ -438,7 +438,31 @@ local function forget(buf)
     end
 end
 
+-- a tab entered: the first window (in window order) of it showing a rule buffer,
+-- or a result buffer (standing for its rule buffer), binds the source files to
+-- that rule buffer, as if it was the last refreshed, and they're redrawn with its
+-- colors. nothing for a tab with neither, or a rule buffer never refreshed
+local function bind_tab()
+    for _, win in ipairs(api.nvim_tabpage_list_wins(0)) do
+        local buf = api.nvim_win_get_buf(win)
+        local st = RULE_STATE[buf]
+        if not st then
+            local _
+            _, st = rule_state_of_result(buf)
+        end
+        if st then
+            if st.bound ~= refreshes then
+                refreshes = refreshes + 1
+                st.bound = refreshes
+                highlight.redraw_sources()
+            end
+            return
+        end
+    end
+end
+
 M.state = RULE_STATE
+M.bind_tab = bind_tab
 M.forget = forget
 M.refresh_from_rule = refresh_from_rule
 M.refresh_highlight = refresh_highlight

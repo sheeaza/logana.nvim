@@ -4,14 +4,6 @@ Open items. Resolved ones (done or cancelled) are in `DONE.md`.
 
 ## Features
 
-- [ ] One workflow per tab: each tab has its own rule and/or result buffer, with its
-  source files opened. Entering a tab (`TabEnter`) that shows a rule or result buffer
-  rebinds the source files in it to that rule, and redraws their `[highlight]` colors.
-  Several rule/result buffers in the tab: the first one (window order) wins. Today a
-  source is bound to the last refreshed rule buffer whose result lists it, in every
-  tab, so switching tabs keeps the other tab's colors until a refresh.
-  - nothing to do in a tab with no rule/result buffer, or no source opened
-  - a result buffer stands for the rule buffer it belongs to
 - [ ] Sticky `file:` header in the result buffer: the header of the file the top row
   of the window belongs to stays on top while scrolling, e.g. in the window's winbar
   (or a floating window over the first line), updated on scroll (`WinScrolled`,

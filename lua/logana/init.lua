@@ -173,6 +173,14 @@ local function setup_keybinding()
         desc = "logana: free the state of a wiped rule/result buffer",
     })
 
+    api.nvim_create_autocmd("TabEnter", {
+        group = M._quit_auto,
+        callback = function()
+            refresh.bind_tab()
+        end,
+        desc = "logana: source files take the colors of the tab's rule buffer",
+    })
+
     api.nvim_create_autocmd("QuitPre", {
         group = M._quit_auto,
         callback = function()
