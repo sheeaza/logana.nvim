@@ -213,6 +213,17 @@ test("<Enter> on a result row: the source not shown in this tab opens in the res
     eq({ 3, 9 }, api.nvim_win_get_cursor(res_win), "cursor")
 end)
 
+test("<Enter> on a result row: a source with no buffer yet opens listed, as :edit", function()
+    local rule = setup_session()
+    set_rule(rule, { "-e 'Timeout'" }, {}, false)
+    refresh(rule)
+    vim.cmd("bwipeout a.log")
+    result_jump(2, 12)
+    local src = api.nvim_get_current_buf()
+    eq(vim.fn.fnamemodify("a.log", ":p"), api.nvim_buf_get_name(src), "source opened")
+    eq(true, vim.bo[src].buflisted, "listed")
+end)
+
 test("result buffer sits next to a rule file opened from another directory", function()
     setup_session()
     vim.fn.mkdir("sub", "p")

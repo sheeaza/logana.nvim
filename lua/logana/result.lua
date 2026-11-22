@@ -156,9 +156,11 @@ local function result_buffer_jump()
         return
     end
 
-    -- an existing buffer of exactly that file, or a new one
+    -- an existing buffer of exactly that file, or a new one. bufadd leaves a new
+    -- buffer unlisted, list it as :edit would
     local target_buf = fn.bufadd(file)
     fn.bufload(target_buf)
+    vim.bo[target_buf].buflisted = true
     local win = api.nvim_get_current_win()
     api.nvim_win_set_buf(win, target_buf)
     pcall(api.nvim_win_set_cursor, win, { lnum, col })
